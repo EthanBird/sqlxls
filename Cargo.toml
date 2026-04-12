@@ -1,0 +1,22 @@
+[package]
+name = "sqlxls"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+calamine = "0.26"
+rust_xlsxwriter = "0.78"
+rusqlite = { version = "0.31", features = ["bundled"] }
+regex = "1.10"
+anyhow = "1.0"
+# 新增：用于在终端直接画出漂亮的数据表（数据探索）
+comfy-table = "7.1"
+# 新增：用于导出 CSV 数据（供 Python 等进一步处理）
+csv = "1.3"
+# 新增：用于导出 JSON 数据（供 Web/API 使用）
+serde_json = "1.0"
+glob = "0.3"
+clipboard-rs = "0.2" # 替换 arboard，支持直接读取系统复制的文件
+fake = "2.9"         # 假数据生成引擎
+arboard = "3.4"      # 跨平台剪贴板操作
