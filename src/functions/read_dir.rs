@@ -27,7 +27,8 @@ impl Extension for ReadDirExt {
                     let file_path = path.to_string_lossy().to_string();
                     // 这里利用 load_single_excel 的 `CREATE TABLE IF NOT EXISTS`
                     // 只要结构相同，后续的文件会直接以 INSERT 方式追加到这张表里
-                    load_single_excel(conn, &file_path, sheet, table_name, force_str)?;
+                    // 批量目录读取时，暂且默认不跳行，且要求明确给出 sheet 名字 (或者传 None)
+                    load_single_excel(conn, &file_path, Some(sheet), 0, table_name, force_str)?;
                     file_count += 1;
                 }
                 Err(_) => continue,

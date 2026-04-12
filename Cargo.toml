@@ -20,3 +20,4 @@ glob = "0.3"
 clipboard-rs = "0.2" # 替换 arboard，支持直接读取系统复制的文件
 fake = "2.9"         # 假数据生成引擎
 arboard = "3.4"      # 跨平台剪贴板操作
+reqwest = { version = "0.11", features = ["blocking"] }

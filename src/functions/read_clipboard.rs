@@ -42,9 +42,10 @@ impl Extension for ReadClipboardExt {
                         .with_context(|| format!("无法打开剪贴板中的 Excel: {}", file_path))?;
                     
                     let sheet_names = workbook.sheet_names().to_owned();
-                    let first_sheet = sheet_names.first().context("Excel 文件中没有任何表格")?;
+                    let _first_sheet = sheet_names.first().context("Excel 文件中没有任何表格")?;
                     
-                    return load_single_excel(conn, file_path, first_sheet, table_name, force_str);
+                    // 直接传入 None 让它自己拿第一个 Sheet，并且不跳行
+                    return load_single_excel(conn, file_path, None, 0, table_name, force_str);
                 } 
                 // 如果是 CSV 或 TXT 文件，读取内容
                 else if ext == "csv" || ext == "txt" {

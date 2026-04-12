@@ -9,25 +9,57 @@ pub struct ReadExcelExt;
 
 impl Extension for ReadExcelExt {
     fn pattern(&self) -> Regex {
-        // 匹配 readexcel('path', 'sheet', 'opt')
-        Regex::new(r#"(?i)readexcel\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"](?:,\s*['"]([^'"]+)['"])?\s*\)"#).unwrap()
+        // 捕获 readexcel 括号里的所有内容，逗号分隔交给内部解析
+        Regex::new(r#"(?i)readexcel\s*\(\s*(.+?)\s*\)"#).unwrap()
     }
 
     fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<()> {
-        let path = captures.get(1).unwrap().as_str();
-        let sheet = captures.get(2).unwrap().as_str();
-        let opt = captures.get(3).map(|m| m.as_str());
-        let force_str = opt == Some("str");
+        let args_str = captures.get(1).unwrap().as_str();
+        
+        // 解析参数：按逗号分割，去除两端空格和引号
+        let args: Vec<&str> = args_str.split(',')
+            .map(|s| s.trim().trim_matches(|c| c == '\'' || c == '"'))
+            .collect();
 
-        load_single_excel(conn, path, sheet, table_name, force_str)
+        let path = args.get(0).unwrap_or(&"");
+        // 如果未填、或填的是空字符串，就传入 None 交由底层取第一个 Sheet
+        let sheet = args.get(1).filter(|&&s| !s.is_empty()).copied(); 
+        // 解析数字作为 skip_rows，解析失败默认 0
+        let skip_rows: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let opt = args.get(3).copied().unwrap_or("");
+        
+        let force_str = opt == "str";
+
+        load_single_excel(conn, path, sheet, skip_rows, table_name, force_str)
     }
 }
 
-// 抽取出来的核心加载方法，readdir 里也能复用
-pub fn load_single_excel(conn: &mut Connection, path: &str, sheet: &str, table_name: &str, force_str: bool) -> Result<()> {
-    let mut workbook = open_workbook_auto(path).with_context(|| format!("无法打开 Excel: {}", path))?;
-    let range = workbook.worksheet_range(sheet).with_context(|| format!("未找到 Sheet: {}", sheet))?;
-    let mut rows = range.rows();
+// 修改签名为支持 Option<&str> 和 skip_rows
+pub fn load_single_excel(
+    conn: &mut Connection, 
+    path: &str, 
+    sheet_opt: Option<&str>, 
+    skip_rows: usize,
+    table_name: &str, 
+    force_str: bool
+) -> Result<()> {
+    let mut workbook = open_workbook_auto(path)
+        .with_context(|| format!("无法打开 Excel: {}", path))?;
+        
+    // 🌟 魔法 1：如果没有提供 sheet，默认取第一个 sheet
+    let sheet_name = match sheet_opt {
+        Some(name) => name.to_string(),
+        None => {
+            let names = workbook.sheet_names().to_owned();
+            names.first().context("Excel 文件中没有任何表格")?.to_string()
+        }
+    };
+
+    let range = workbook.worksheet_range(&sheet_name)
+        .with_context(|| format!("未找到 Sheet: {}", sheet_name))?;
+        
+    // 🌟 魔法 2：Pandas skiprows 逻辑，跳过前 N 行再开始解析表头
+    let mut rows = range.rows().skip(skip_rows);
     
     let headers = match rows.next() {
         Some(row) => row,
