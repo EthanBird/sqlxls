@@ -4,23 +4,22 @@ use regex::Regex;
 use rusqlite::Connection;
 use serde_json::Value;
 use std::fs;
-
+use crate::engine::ExtResult;
 pub struct ReadJsonExt;
 
 impl Extension for ReadJsonExt {
     fn pattern(&self) -> Regex {
-        // 匹配 readjson('path')
         Regex::new(r#"(?i)readjson\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap()
     }
 
-    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<()> {
+    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<ExtResult> {
         let path = captures.get(1).unwrap().as_str();
         let content = fs::read_to_string(path).with_context(|| format!("无法读取 JSON 文件: {}", path))?;
-        let value: Value = serde_json::from_str(&content).context("JSON 格式不合法")?;
+        let value: serde_json::Value = serde_json::from_str(&content).context("JSON 格式不合法")?;
         
         json_to_sqlite(conn, &value, table_name)?;
         println!("📄 已从 JSON 文件加载数据到表: {}", table_name);
-        Ok(())
+        Ok(ExtResult::Table)
     }
 }
 

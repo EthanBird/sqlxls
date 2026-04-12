@@ -3,14 +3,33 @@ use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Table};
 use rusqlite::{types::ValueRef, Connection};
 use rust_xlsxwriter::Workbook;
 use std::fs::File;
+use std::io::Write; // 新增写入特征
 use std::path::PathBuf;
 
-/// 插件特征：所有 SQL 拦截函数都必须实现这个 Trait
+/// 新增：扩展函数的执行结果形态
+pub enum ExtResult {
+    Table,         // 成功将数据作为表格挂载到了 SQLite 临时表中
+    Text(String),  // 直接返回了纯文本内容 (用于宏替换或直接输出)
+}
+
 pub trait Extension {
-    /// 匹配该函数的正则表达式
     fn pattern(&self) -> regex::Regex;
-    /// 解析匹配参数，加载数据到 SQLite，表名为传入的 table_name
-    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<()>;
+    // 修改：返回值从 Result<()> 变为 Result<ExtResult>
+    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<ExtResult>;
+}
+
+// ==========================================
+// 新增：专门用于纯文本结果输出的引擎
+// ==========================================
+pub fn handle_text_output(text: &str, output_path: Option<&PathBuf>) -> Result<()> {
+    if let Some(path) = output_path {
+        let mut file = File::create(path)?;
+        file.write_all(text.as_bytes())?;
+        println!("✅ 纯文本结果已保存至: {:?}", path);
+    } else {
+        println!("{}", text); // 直接在控制台打印文本
+    }
+    Ok(())
 }
 
 /// 执行 SQL 并路由输出格式

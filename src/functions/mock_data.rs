@@ -3,7 +3,7 @@ use anyhow::Result;
 use fake::{Fake, faker};
 use regex::Regex;
 use rusqlite::Connection;
-
+use crate::engine::ExtResult;
 pub struct MockDataExt;
 
 impl Extension for MockDataExt {
@@ -12,7 +12,7 @@ impl Extension for MockDataExt {
         Regex::new(r#"(?i)mock_data\s*\(\s*(\d+)\s*(?P<cols>.*)\)"#).unwrap()
     }
 
-    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<()> {
+    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<ExtResult> {
         let count: usize = captures[1].parse()?;
         let cols_raw = &captures["cols"];
         
@@ -56,6 +56,6 @@ impl Extension for MockDataExt {
         }
 
         println!("🎲 已生成 {} 条模拟数据到表: {}", count, table_name);
-        Ok(())
+        Ok(ExtResult::Table)
     }
 }

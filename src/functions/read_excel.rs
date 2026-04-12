@@ -4,33 +4,30 @@ use calamine::{open_workbook_auto, Data, Reader};
 use regex::Regex;
 use rusqlite::{Connection, ToSql};
 use std::collections::HashSet;
-
+use crate::engine::ExtResult;
 pub struct ReadExcelExt;
 
 impl Extension for ReadExcelExt {
     fn pattern(&self) -> Regex {
-        // 捕获 readexcel 括号里的所有内容，逗号分隔交给内部解析
         Regex::new(r#"(?i)readexcel\s*\(\s*(.+?)\s*\)"#).unwrap()
     }
 
-    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<()> {
+    // 注意这里改成了 -> Result<ExtResult>
+    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<ExtResult> {
         let args_str = captures.get(1).unwrap().as_str();
-        
-        // 解析参数：按逗号分割，去除两端空格和引号
         let args: Vec<&str> = args_str.split(',')
             .map(|s| s.trim().trim_matches(|c| c == '\'' || c == '"'))
             .collect();
 
         let path = args.get(0).unwrap_or(&"");
-        // 如果未填、或填的是空字符串，就传入 None 交由底层取第一个 Sheet
         let sheet = args.get(1).filter(|&&s| !s.is_empty()).copied(); 
-        // 解析数字作为 skip_rows，解析失败默认 0
         let skip_rows: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
         let opt = args.get(3).copied().unwrap_or("");
-        
         let force_str = opt == "str";
 
-        load_single_excel(conn, path, sheet, skip_rows, table_name, force_str)
+        // 注意这里加上了 ?; 
+        load_single_excel(conn, path, sheet, skip_rows, table_name, force_str)?;
+        Ok(ExtResult::Table)
     }
 }
 
