@@ -1,95 +1,171 @@
-# 📊 sqlxls
+# sqlxls
 
-**sqlxls** 是一个基于 Rust 开发的、使用 SQL 语法来处理 Excel/CSV/剪贴板数据的命令行轻量级框架。
+**sqlxls** 是一个用 SQL 做数据清理与分析的命令行工具。Excel 只是数据源之一：本地 CSV / JSON、目录通配、剪贴板、HTTP API 都可以当成表来 JOIN、过滤、聚合，再导出成表格文件。
 
-它通过在内存中利用 SQLite 构建临时表，让你能够使用标准且强大的 SQL 语句（如 `JOIN`、`GROUP BY`、子查询等）直接对本地文件或剪贴板数据进行查询、关联和分析，并支持输出为多种常见格式。
+底层目前是内存 SQLite；导入路径使用**显式事务 + 批量 INSERT**。完整技术设计见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-## ✨ 特性
+## 能做什么
 
-- **多样化数据源读取**：
-  - `readexcel`: 读取单个 Excel 文件。
-  - `readdir`: 批量读取并合并某个目录下所有匹配通配符的 Excel 文件。
-  - `readclipboard`: 极度方便的剪贴板读取功能，支持读取纯文本表格、CSV 内容，甚至可以直接解析在资源管理器中复制的 Excel 文件。
-- **内置假数据引擎**：通过 `mock_data` 函数在 SQL 中快速生成测试用的姓名、电话、邮箱等假数据。
-- **强大的 SQL 引擎**：底层基于 SQLite，支持所有的标准 SQL 语法。
-- **多格式输出**：
-  - 默认在终端中渲染美观的数据表格（探索数据时极佳）。
-  - 支持通过参数直接将结果导出为 `.csv`、`.json` 或 `.xlsx`。
+- 把 `read_excel` / `read_csv` / `read_json` / `read_api` 等**表函数**写在 `FROM` 里
+- 一条 SQL 里关联多个来源（文件 JOIN 接口、目录合并后再 GROUP BY）
+- 嵌套调用：`read_csv(read_text('path.txt'))`，内层先求值，不会把文件内容拼进 SQL
+- 多语句会话：先 `CREATE TABLE t AS SELECT ...`，再查询
+- 导出终端表 / CSV / JSON / NDJSON / xlsx
 
-## 📦 安装与编译
+## 安装
 
-确保你的电脑上安装了 Rust 环境，然后在项目根目录下运行：
+需要较新的稳定版 Rust（建议 1.88+）：
 
 ```bash
 cargo build --release
 ```
-编译成功后，可执行文件将生成在 `target/release/sqlxls`。
 
-## 🚀 简单的使用说明
+可执行文件在 `target/release/sqlxls`。
 
-`sqlxls` 的核心理念是将数据加载函数直接嵌入到 SQL 的 `FROM` 子句中。
+## 用法
 
-**基本语法：**
 ```bash
-sqlxls "你的 SQL 语句" [-o 输出文件路径]
+sqlxls "SQL 语句" [-o 输出文件]
+sqlxls query.sql [-o 输出文件]
+sqlxls -f "read_api('https://example.com/data.json')"
+sqlxls "SELECT ..." --explain    # 打印改写后的 SQL
 ```
 
-### 1. 读取并查询 Excel
-使用 `readexcel('文件路径', 'Sheet名称')` 作为表名：
+整段输入如果就是一个表函数，可以省略 `SELECT * FROM`：
+
 ```bash
-sqlxls "SELECT * FROM readexcel('data.xlsx', 'Sheet1') WHERE id > 100"
-```
-*(可选：你可以传入第三个参数 `'str'`，将所有单元格强制以字符串形式读取)*：
-```bash
-sqlxls "SELECT * FROM readexcel('data.xlsx', 'Sheet1', 'str')"
+sqlxls "read_csv('sales.csv')"
 ```
 
-### 2. 批量合并目录下的 Excel
-使用 `readdir('通配符路径', 'Sheet名称')` 可以把结构相同的多个表格自动合并为一张大表进行查询：
+### 1. Excel
+
 ```bash
-sqlxls "SELECT category, SUM(price) FROM readdir('./sales_*.xlsx', 'Sheet1') GROUP BY category"
+sqlxls "SELECT * FROM read_excel('data.xlsx', 'Sheet1') WHERE id > 100"
+sqlxls "SELECT * FROM read_excel('data.xlsx')"                      # 默认第一个 sheet
+sqlxls "SELECT * FROM read_excel('data.xlsx', sheet='Sheet1', skip=2, str=true)"
 ```
 
-### 3. 直接查询剪贴板数据 (极速体验)
-复制了一段带有制表符或逗号分隔的文本（或是直接复制了某个 `.xlsx` / `.csv` 文件），然后运行：
+第三参数既可以是跳过行数，也可以是 `'str'`（与早期文档兼容）：
+
 ```bash
-sqlxls "SELECT * FROM readclipboard() LIMIT 10"
+sqlxls "SELECT * FROM read_excel('data.xlsx', 'Sheet1', 'str')"
 ```
 
-### 4. 复杂的多表 JOIN
-你可以在一条 SQL 中调用多个读取函数，实现跨文件的数据关联：
+### 2. CSV / 自动识别
+
 ```bash
-sqlxls "
-SELECT a.id, a.name, b.department 
-FROM readexcel('users.xlsx', 'Sheet1') AS a
-JOIN readclipboard() AS b ON a.id = b.user_id
-"
+sqlxls "SELECT category, SUM(price) FROM read_csv('sales.csv') GROUP BY category"
+sqlxls "SELECT * FROM read('orders.tsv')"          # 按扩展名分发
+sqlxls "SELECT * FROM read('https://example.com/data.json')"
 ```
 
-### 5. 生成模拟数据 (Mock Data)
-内置了假数据生成器，非常适合用来测试。支持的类型有：`name` (姓名), `phone` (电话), `email` (邮箱), `company` (公司), `city` (城市)。
-格式为：`mock_data(生成行数, '列名:类型', ...)`
+### 3. JSON（支持路径，字段取并集）
+
 ```bash
+sqlxls "SELECT * FROM read_json('resp.json')"
+sqlxls "SELECT * FROM read_json('resp.json', json_path='data.items')"
+```
+
+根对象若未指定路径，会依次尝试 `data` / `items` / `results` / `records` / `rows`，否则取第一个数组。
+
+### 4. HTTP API
+
+```bash
+sqlxls "SELECT * FROM read_api('https://api.example.com/orders')"
+sqlxls "SELECT * FROM read_api(
+  'https://api.example.com/query',
+  'POST',
+  read_text('payload.json'),
+  '{\"Authorization\":\"Bearer \${TOKEN}\"}',
+  'data'
+)"
+```
+
+参数：`url, method?, body?, headers?, json_path?`。`headers` 为 JSON 对象；`${ENV}` 会展开。若设置了环境变量 `SQLXLS_BEARER_TOKEN` 且未提供 Authorization，会自动带上 Bearer。默认 30s 超时。HTML 错误页**不会**再被当成 Excel。
+
+### 5. 目录合并（按列名对齐）
+
+```bash
+sqlxls "SELECT * FROM read_dir('./sales_*.xlsx', 'Sheet1')"
+sqlxls "SELECT * FROM read_dir('./logs_*.csv')"
+```
+
+后续文件多出来的列会 `ALTER TABLE` 补上，缺的列填 NULL。不要再假设「列数相同就按位置插入」。
+
+### 6. 剪贴板与假数据
+
+```bash
+sqlxls "SELECT * FROM read_clipboard() LIMIT 10"
+sqlxls "SELECT * FROM read_clipboard(delim='\t')"
 sqlxls "SELECT * FROM mock_data(10, '用户名:name', '联系方式:phone', '所在城市:city')"
 ```
 
-### 6. 导出结果
-如果不带任何参数，结果会在终端以 ASCII 表格打印出来。你可以使用 `-o` 或 `--output` 将查询结果导出：
+`mock_data` 类型：`name` / `phone` / `email` / `company` / `city`。
+
+### 7. 多表 JOIN 与多语句
+
 ```bash
-# 导出为 Excel
-sqlxls "SELECT * FROM readexcel('data.xlsx', 'Sheet1')" -o result.xlsx
-
-# 导出为 CSV
-sqlxls "SELECT * FROM readexcel('data.xlsx', 'Sheet1')" -o result.csv
-
-# 导出为 JSON (常用于给 API 准备数据)
-sqlxls "SELECT * FROM readexcel('data.xlsx', 'Sheet1')" -o result.json
+sqlxls "
+SELECT a.id, a.name, b.department
+FROM read_excel('users.xlsx') AS a
+JOIN read_csv('dept.csv') AS b ON a.id = b.user_id
+"
 ```
 
-## 📝 TODO List
+```sql
+-- save as report.sql
+CREATE TABLE users AS SELECT * FROM read_excel('users.xlsx');
+CREATE TABLE orders AS SELECT * FROM read_csv('orders.csv');
+SELECT u.name, SUM(o.amount) AS total
+FROM users u
+JOIN orders o ON u.id = o.user_id
+GROUP BY u.name
+ORDER BY total DESC;
+```
 
-- [ ] **新增外部数据源支持**：计划增加 `readmysql()` 和 `readapi()` 等扩展功能。
-- [ ] **剪贴板格式增强**：支持通过参数自定义剪贴板纯文本的解析分隔符（目前自动猜测制表符或逗号）。
-- [ ] **内存优化**：在处理超大型 Excel 时优化 `calamine` 与 `rusqlite` 的内存占用，提供流式读取的可能。
-- [ ] **写回/更新功能**：探索不仅仅是 `SELECT`，而是使用 `UPDATE`/`INSERT` 将处理完的数据直接写回 Excel 的实现方案。
-- [ ] **CI/CD**：配置 GitHub Actions，提供 Windows / macOS / Linux 跨平台的预编译可执行文件下载。
+```bash
+sqlxls report.sql -o result.xlsx
+```
+
+### 8. 导出
+
+```bash
+sqlxls "SELECT * FROM read_csv('data.csv')" -o result.xlsx
+sqlxls "SELECT * FROM read_csv('data.csv')" -o result.csv
+sqlxls "SELECT * FROM read_csv('data.csv')" -o result.json
+sqlxls "SELECT * FROM read_csv('data.csv')" -o result.ndjson
+```
+
+## 表函数一览
+
+| 函数 | 别名 | 说明 |
+|------|------|------|
+| `read_excel(path, sheet?, skip?, str?)` | `readexcel` | 工作簿 |
+| `read_csv(path, delim?, skip?)` | `readcsv` | CSV / TSV |
+| `read_json(path, json_path?)` | `readjson` | JSON |
+| `read_api(url, method?, body?, headers?, json_path?)` | `readapi` | HTTP |
+| `read_dir(glob, sheet?, ...)` | `readdir` / `read_glob` | 多文件合并 |
+| `read_clipboard(delim?, str?)` | `readclipboard` | 剪贴板 |
+| `read_text(path_or_url)` | `readtext` | 标量文本，供嵌套参数 |
+| `read(path_or_url, ...)` | | 按扩展名 / `http(s)` 分发 |
+| `mock_data(n, 'col:type', ...)` | | 假数据 |
+
+命名参数示例：`read_excel('a.xlsx', sheet='S1', skip=1, str=true)`。
+
+## 设计原则（摘要）
+
+1. **连接器只负责解码成行**；建表、类型推断、事务写入由统一 Ingest 完成。  
+2. **表函数用括号扫描器解析**，不再靠正则截参数。  
+3. **引擎可替换**：第一期 SQLite，分析变重后再上 DuckDB，用户 SQL 尽量不变。  
+
+细节、已知缺陷对照、以及远程分页 / Catalog / 写回等后续能力见 [架构方案](docs/ARCHITECTURE.md)。
+
+## 路线图
+
+- [x] 统一连接器 + 事务导入 + 表函数扫描器
+- [x] CSV / JSON Path / HTTP 超时与内容嗅探
+- [ ] `sqlxls.toml` 命名数据源与结果缓存
+- [ ] HTTP 分页、REPL、`--schema`
+- [ ] Parquet 输出；可选 DuckDB 引擎
+- [ ] `read_sql`（Postgres / MySQL 只读）
+- [ ] GitHub Actions 预编译 Windows / macOS / Linux 二进制

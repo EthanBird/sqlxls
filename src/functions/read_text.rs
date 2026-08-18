@@ -1,31 +1,33 @@
-use crate::engine::{Extension, ExtResult};
+use crate::args::Args;
+use crate::functions::{ExecCtx, FuncOutput, TableFunction};
 use anyhow::{Context, Result};
-use regex::Regex;
-use rusqlite::Connection;
 use std::fs;
+use std::time::Duration;
 
 pub struct ReadTextExt;
 
-impl Extension for ReadTextExt {
-    fn pattern(&self) -> Regex {
-        // 匹配 readtext('文件路径')
-        Regex::new(r#"(?i)readtext\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap()
+impl TableFunction for ReadTextExt {
+    fn names(&self) -> &'static [&'static str] {
+        &["read_text", "readtext"]
     }
 
-    fn execute(&self, _conn: &mut Connection, captures: &regex::Captures, _table_name: &str) -> Result<ExtResult> {
-        let path = captures.get(1).unwrap().as_str();
-        
-        // 我们甚至可以加入简单的网络识别
-        let content = if path.starts_with("http") {
-            reqwest::blocking::get(path)
-                .with_context(|| format!("请求文本 API 失败: {}", path))?
+    fn execute(&self, _ctx: &mut ExecCtx, args: &Args) -> Result<FuncOutput> {
+        let path = args.require_str(0, &["path", "file", "url"], "文本路径或 URL")?;
+        let content = if path.starts_with("http://") || path.starts_with("https://") {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .user_agent("sqlxls/0.2")
+                .build()?;
+            client
+                .get(&path)
+                .send()
+                .with_context(|| format!("请求文本失败: {}", path))?
+                .error_for_status()
+                .with_context(|| format!("请求文本失败: {}", path))?
                 .text()?
         } else {
-            fs::read_to_string(path)
-                .with_context(|| format!("无法读取本地文本文件: {}", path))?
+            fs::read_to_string(&path).with_context(|| format!("无法读取本地文本文件: {}", path))?
         };
-
-        // 🌟 重点：返回纯文本特征
-        Ok(ExtResult::Text(content))
+        Ok(FuncOutput::Scalar(content))
     }
 }

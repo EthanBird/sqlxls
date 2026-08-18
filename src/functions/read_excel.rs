@@ -1,120 +1,182 @@
-use crate::engine::Extension;
+use crate::args::Args;
+use crate::functions::{ExecCtx, FuncOutput, TableFunction};
+use crate::ingest::{ingest_rows, Cell, IngestOpts};
+use crate::schema::unique_column_names;
 use anyhow::{Context, Result};
 use calamine::{open_workbook_auto, Data, Reader};
-use regex::Regex;
-use rusqlite::{Connection, ToSql};
-use std::collections::HashSet;
-use crate::engine::ExtResult;
+use chrono::{Duration, NaiveDate};
+
 pub struct ReadExcelExt;
 
-impl Extension for ReadExcelExt {
-    fn pattern(&self) -> Regex {
-        Regex::new(r#"(?i)readexcel\s*\(\s*(.+?)\s*\)"#).unwrap()
+impl TableFunction for ReadExcelExt {
+    fn names(&self) -> &'static [&'static str] {
+        &["read_excel", "readexcel"]
     }
 
-    // 注意这里改成了 -> Result<ExtResult>
-    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<ExtResult> {
-        let args_str = captures.get(1).unwrap().as_str();
-        let args: Vec<&str> = args_str.split(',')
-            .map(|s| s.trim().trim_matches(|c| c == '\'' || c == '"'))
-            .collect();
-
-        let path = args.get(0).unwrap_or(&"");
-        let sheet = args.get(1).filter(|&&s| !s.is_empty()).copied(); 
-        let skip_rows: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-        let opt = args.get(3).copied().unwrap_or("");
-        let force_str = opt == "str";
-
-        // 注意这里加上了 ?; 
-        load_single_excel(conn, path, sheet, skip_rows, table_name, force_str)?;
-        Ok(ExtResult::Table)
+    fn execute(&self, ctx: &mut ExecCtx, args: &Args) -> Result<FuncOutput> {
+        let spec = parse_excel_args(args)?;
+        let (headers, rows) =
+            excel_to_frame(&spec.path, spec.sheet.as_deref(), spec.skip, spec.force_str)?;
+        ingest_rows(
+            ctx.conn,
+            &ctx.dest_table,
+            &headers,
+            rows,
+            IngestOpts {
+                force_str: spec.force_str,
+                append: false,
+            },
+        )?;
+        Ok(FuncOutput::Table)
     }
 }
 
-// 修改签名为支持 Option<&str> 和 skip_rows
-pub fn load_single_excel(
-    conn: &mut Connection, 
-    path: &str, 
-    sheet_opt: Option<&str>, 
-    skip_rows: usize,
-    table_name: &str, 
-    force_str: bool
-) -> Result<()> {
-    let mut workbook = open_workbook_auto(path)
-        .with_context(|| format!("无法打开 Excel: {}", path))?;
-        
-    // 🌟 魔法 1：如果没有提供 sheet，默认取第一个 sheet
-    let sheet_name = match sheet_opt {
-        Some(name) => name.to_string(),
-        None => {
-            let names = workbook.sheet_names().to_owned();
-            names.first().context("Excel 文件中没有任何表格")?.to_string()
-        }
-    };
+pub struct ExcelSpec {
+    pub path: String,
+    pub sheet: Option<String>,
+    pub skip: usize,
+    pub force_str: bool,
+}
 
-    let range = workbook.worksheet_range(&sheet_name)
-        .with_context(|| format!("未找到 Sheet: {}", sheet_name))?;
-        
-    // 🌟 魔法 2：Pandas skiprows 逻辑，跳过前 N 行再开始解析表头
-    let mut rows = range.rows().skip(skip_rows);
-    
-    let headers = match rows.next() {
-        Some(row) => row,
-        None => return Ok(()),
-    };
+fn is_str_flag(args: &Args, index: usize) -> bool {
+    args.positional.get(index).and_then(|v| v.as_bool()) == Some(true)
+}
 
-    let mut create_table_sql = format!("CREATE TABLE IF NOT EXISTS {} (", table_name);
-    let mut seen_cols = HashSet::new();
+pub fn parse_excel_args(args: &Args) -> Result<ExcelSpec> {
+    let path = args.require_str(0, &["path", "file"], "Excel 路径")?;
+    let mut force_str = args.get_bool(99, &["str", "force_str"]) || is_str_flag(args, 3);
+    let mut skip = args.get_usize(2, &["skip", "skiprows", "skip_rows"], 0);
+    let mut sheet = args
+        .get_str(1, &["sheet"])
+        .filter(|s| !s.is_empty() && s.as_str() != "null");
 
-    for (i, header) in headers.iter().enumerate() {
-        let col_name = match header {
-            Data::String(s) if !s.trim().is_empty() => s.trim().to_string(),
-            _ => format!("col_{}", i),
-        };
-        let mut safe_name = col_name.clone();
-        let mut count = 1;
-        while seen_cols.contains(&safe_name) {
-            safe_name = format!("{}_{}", col_name, count);
-            count += 1;
-        }
-        seen_cols.insert(safe_name.clone());
-        create_table_sql.push_str(&format!("\"{}\", ", safe_name.replace("\"", "\"\"")));
+    // README 兼容：第三参数可以是 'str' 而不是 skip
+    if is_str_flag(args, 1) {
+        sheet = None;
+        force_str = true;
     }
-    
-    create_table_sql.truncate(create_table_sql.len() - 2); 
-    create_table_sql.push(')');
-    conn.execute(&create_table_sql, [])?;
+    if is_str_flag(args, 2) {
+        skip = args.get_usize(99, &["skip", "skiprows", "skip_rows"], 0);
+        force_str = true;
+    }
+    if sheet.as_deref() == Some("str") && !args.named.contains_key("sheet") {
+        sheet = None;
+        force_str = true;
+    }
 
-    let placeholders = vec!["?"; headers.len()].join(", ");
-    let insert_sql = format!("INSERT INTO {} VALUES ({})", table_name, placeholders);
-    let mut stmt = conn.prepare(&insert_sql)?;
+    Ok(ExcelSpec {
+        path,
+        sheet,
+        skip,
+        force_str,
+    })
+}
 
-    for row in rows {
-        let mut params_vec: Vec<Box<dyn ToSql>> = Vec::with_capacity(headers.len());
-        for cell in row.iter() {
-            if force_str {
-                let s = match cell {
-                    Data::Empty | Data::Error(_) => None,
-                    Data::String(s) | Data::DateTimeIso(s) | Data::DurationIso(s) => Some(s.clone()),
-                    Data::Int(i) => Some(i.to_string()),
-                    Data::Float(f) => Some(f.to_string()),
-                    Data::Bool(b) => Some(b.to_string()),
-                    Data::DateTime(d) => Some(d.as_f64().to_string()),
-                };
-                if let Some(val) = s { params_vec.push(Box::new(val)); } else { params_vec.push(Box::new(rusqlite::types::Null)); }
+pub fn excel_to_frame(
+    path: &str,
+    sheet_opt: Option<&str>,
+    skip_rows: usize,
+    force_str: bool,
+) -> Result<(Vec<String>, Vec<Vec<Cell>>)> {
+    let mut workbook =
+        open_workbook_auto(path).with_context(|| format!("无法打开 Excel: {}", path))?;
+    let sheet_name = match sheet_opt {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => workbook
+            .sheet_names()
+            .first()
+            .cloned()
+            .context("Excel 文件中没有任何表格")?,
+    };
+    let range = workbook
+        .worksheet_range(&sheet_name)
+        .with_context(|| format!("未找到 Sheet: {}", sheet_name))?;
+
+    let mut iter = range.rows().skip(skip_rows);
+    let header_row = iter.next().context("跳过指定行后没有任何数据（无表头）")?;
+    let raw_headers: Vec<String> = header_row
+        .iter()
+        .enumerate()
+        .map(|(i, cell)| match cell {
+            Data::String(s) if !s.trim().is_empty() => s.trim().to_string(),
+            Data::Int(n) => n.to_string(),
+            Data::Float(f) => f.to_string(),
+            _ => format!("col_{}", i),
+        })
+        .collect();
+    let headers = unique_column_names(raw_headers);
+    let width = headers.len();
+
+    let mut rows = Vec::new();
+    for row in iter {
+        let mut cells = Vec::with_capacity(width);
+        for i in 0..width {
+            let cell = row.get(i).unwrap_or(&Data::Empty);
+            cells.push(data_to_cell(cell, force_str));
+        }
+        rows.push(cells);
+    }
+    Ok((headers, rows))
+}
+
+fn data_to_cell(cell: &Data, force_str: bool) -> Cell {
+    if force_str {
+        return match cell {
+            Data::Empty | Data::Error(_) => Cell::Null,
+            Data::String(s) | Data::DateTimeIso(s) | Data::DurationIso(s) => Cell::Text(s.clone()),
+            Data::Int(i) => Cell::Text(i.to_string()),
+            Data::Float(f) => Cell::Text(f.to_string()),
+            Data::Bool(b) => Cell::Text(b.to_string()),
+            Data::DateTime(d) => Cell::Text(datetime_cell(d)),
+        };
+    }
+    match cell {
+        Data::Empty | Data::Error(_) => Cell::Null,
+        Data::String(s) | Data::DateTimeIso(s) | Data::DurationIso(s) => Cell::Text(s.clone()),
+        Data::Int(i) => Cell::Int(*i),
+        Data::Float(f) => Cell::Real(*f),
+        Data::Bool(b) => Cell::Bool(*b),
+        Data::DateTime(d) => {
+            if d.is_duration() {
+                Cell::Real(d.as_f64())
             } else {
-                match cell {
-                    Data::Empty | Data::Error(_) => params_vec.push(Box::new(rusqlite::types::Null)),
-                    Data::String(s) | Data::DateTimeIso(s) | Data::DurationIso(s) => params_vec.push(Box::new(s.clone())),
-                    Data::Int(i) => params_vec.push(Box::new(*i)),
-                    Data::Float(f) => params_vec.push(Box::new(*f)),
-                    Data::Bool(b) => params_vec.push(Box::new(*b)),
-                    Data::DateTime(d) => params_vec.push(Box::new(d.as_f64())),
-                }
+                Cell::Text(datetime_cell(d))
             }
         }
-        let params: Vec<&dyn ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
-        stmt.execute(&*params)?;
     }
-    Ok(())
+}
+
+fn datetime_cell(d: &calamine::ExcelDateTime) -> String {
+    if let Some(dt) = d.as_datetime() {
+        let s = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+        if s.ends_with(" 00:00:00") {
+            s[..10].to_string()
+        } else {
+            s
+        }
+    } else {
+        excel_serial_to_iso(d.as_f64())
+    }
+}
+
+fn excel_serial_to_iso(serial: f64) -> String {
+    if !serial.is_finite() {
+        return serial.to_string();
+    }
+    let days = serial.trunc() as i64;
+    let frac_secs = (serial.fract().abs() * 86400.0).round() as i64;
+    let Some(base) = NaiveDate::from_ymd_opt(1899, 12, 30) else {
+        return serial.to_string();
+    };
+    let Some(date) = base.checked_add_signed(Duration::days(days)) else {
+        return serial.to_string();
+    };
+    if frac_secs == 0 {
+        date.format("%Y-%m-%d").to_string()
+    } else {
+        let h = frac_secs / 3600;
+        let m = (frac_secs % 3600) / 60;
+        let s = frac_secs % 60;
+        format!("{} {:02}:{:02}:{:02}", date.format("%Y-%m-%d"), h, m, s)
+    }
 }
