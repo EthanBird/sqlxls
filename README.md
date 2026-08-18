@@ -2,14 +2,15 @@
 
 **sqlxls** 是一个用 SQL 做数据清理与分析的命令行工具。Excel 只是数据源之一：本地 CSV / JSON、目录通配、剪贴板、HTTP API 都可以当成表来 JOIN、过滤、聚合，再导出成表格文件。
 
-底层目前是内存 SQLite；导入路径使用**显式事务 + 批量 INSERT**。完整技术设计见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+底层目前是内存 SQLite；导入路径使用**显式事务 + 批量 INSERT**。  
+技术架构见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，**语法稳定方案**见 [`docs/SYNTAX.md`](docs/SYNTAX.md)。
 
 ## 能做什么
 
-- 把 `read_excel` / `read_csv` / `read_json` / `read_api` 等**表函数**写在 `FROM` 里
-- 一条 SQL 里关联多个来源（文件 JOIN 接口、目录合并后再 GROUP BY）
+- **推荐**：`LOAD 表 FROM '文件' WITH (...)` 绑定数据源，后面写标准 SQL
+- 一行探索：把 `read(...)` 写在 `FROM` 里（糖）
 - 嵌套调用：`read_csv(read_text('path.txt'))`，内层先求值，不会把文件内容拼进 SQL
-- 多语句会话：先 `CREATE TABLE t AS SELECT ...`，再查询
+- `--strict`：除定位符外必须用命名参数
 - 导出终端表 / CSV / JSON / NDJSON / xlsx
 
 ## 安装
@@ -29,7 +30,22 @@ sqlxls "SQL 语句" [-o 输出文件]
 sqlxls query.sql [-o 输出文件]
 sqlxls -f "read_api('https://example.com/data.json')"
 sqlxls "SELECT ..." --explain    # 打印改写后的 SQL
+sqlxls script.sql --strict      # 禁止位置参数超载
 ```
+
+### 0. 推荐：先 LOAD，再写标准 SQL
+
+```sql
+LOAD users  FROM 'users.xlsx' WITH (format='excel', sheet='Sheet1');
+LOAD orders FROM 'https://api.example.com/orders' WITH (format='json', json_path='data');
+
+SELECT u.name, SUM(o.amount) AS total
+FROM users u
+JOIN orders o ON u.id = o.user_id
+GROUP BY u.name;
+```
+
+查询部分不再出现 `read_*`。这是长期要冻结的写法。
 
 整段输入如果就是一个表函数，可以省略 `SELECT * FROM`：
 

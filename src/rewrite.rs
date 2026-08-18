@@ -3,6 +3,7 @@ use crate::args::{
     sql_quote, ArgExpr, ArgSlot, Args, Value,
 };
 use crate::functions::{ExecCtx, FuncOutput, Registry};
+use crate::syntax::{validate_source_args, SourceSpec, SyntaxOpts};
 use anyhow::{bail, Result};
 use rusqlite::Connection;
 
@@ -61,17 +62,18 @@ pub fn eval_arg_slots(
     conn: &mut Connection,
     registry: &Registry,
     counter: &mut usize,
+    opts: &SyntaxOpts,
 ) -> Result<Args> {
     let mut args = Args::default();
     for slot in slots {
         match slot {
             ArgSlot::Positional(expr) => {
                 args.positional
-                    .push(eval_expr(expr, conn, registry, counter)?);
+                    .push(eval_expr(expr, conn, registry, counter, opts)?);
             }
             ArgSlot::Named(name, expr) => {
                 args.named
-                    .insert(name, eval_expr(expr, conn, registry, counter)?);
+                    .insert(name, eval_expr(expr, conn, registry, counter, opts)?);
             }
         }
     }
@@ -83,13 +85,16 @@ fn eval_expr(
     conn: &mut Connection,
     registry: &Registry,
     counter: &mut usize,
+    opts: &SyntaxOpts,
 ) -> Result<Value> {
     match expr {
         ArgExpr::Literal(v) => Ok(v),
-        ArgExpr::Call { name, args } => match eval_call(&name, args, conn, registry, counter)? {
-            CallResult::Table(t) => Ok(Value::Str(t)),
-            CallResult::Scalar(s) => Ok(Value::Str(s)),
-        },
+        ArgExpr::Call { name, args } => {
+            match eval_call(&name, args, conn, registry, counter, None, opts)? {
+                CallResult::Table(t) => Ok(Value::Str(t)),
+                CallResult::Scalar(s) => Ok(Value::Str(s)),
+            }
+        }
     }
 }
 
@@ -104,10 +109,16 @@ fn eval_call(
     conn: &mut Connection,
     registry: &Registry,
     counter: &mut usize,
+    dest: Option<String>,
+    opts: &SyntaxOpts,
 ) -> Result<CallResult> {
-    let args = eval_arg_slots(slots, conn, registry, counter)?;
-    let dest = format!("excel_tmp_{}", *counter);
-    *counter += 1;
+    validate_source_args(name, &slots, opts.strict)?;
+    let args = eval_arg_slots(slots, conn, registry, counter, opts)?;
+    let dest = dest.unwrap_or_else(|| {
+        let t = format!("excel_tmp_{}", *counter);
+        *counter += 1;
+        t
+    });
     let mut ctx = ExecCtx {
         conn,
         dest_table: dest.clone(),
@@ -118,12 +129,50 @@ fn eval_call(
     }
 }
 
+/// 求值 LOAD 的数据源，写入 `dest_table`（若给定）。
+pub fn eval_source(
+    source: &SourceSpec,
+    dest_table: Option<String>,
+    conn: &mut Connection,
+    registry: &Registry,
+    counter: &mut usize,
+    opts: &SyntaxOpts,
+) -> Result<CallOut> {
+    match source {
+        SourceSpec::Locator { uri, options } => {
+            let mut slots = vec![ArgSlot::Positional(ArgExpr::Literal(Value::Str(
+                uri.clone(),
+            )))];
+            slots.extend(options.clone());
+            match eval_call("read", slots, conn, registry, counter, dest_table, opts)? {
+                CallResult::Table(t) => Ok(CallOut::Table(t)),
+                CallResult::Scalar(s) => Ok(CallOut::Scalar(s)),
+            }
+        }
+        SourceSpec::Call { name, args } => {
+            match eval_call(
+                name,
+                args.clone(),
+                conn,
+                registry,
+                counter,
+                dest_table,
+                opts,
+            )? {
+                CallResult::Table(t) => Ok(CallOut::Table(t)),
+                CallResult::Scalar(s) => Ok(CallOut::Scalar(s)),
+            }
+        }
+    }
+}
+
 /// 把 SQL 中的表函数求值并替换成临时表名（或 SQL 字符串字面量）。
 pub fn rewrite_sql(
     sql: &str,
     conn: &mut Connection,
     registry: &Registry,
     counter: &mut usize,
+    opts: &SyntaxOpts,
 ) -> Result<String> {
     let is_func = |n: &str| registry.is_func(n);
     let mut calls = find_top_level_calls(sql, &is_func)?;
@@ -136,7 +185,7 @@ pub fn rewrite_sql(
     for call in calls {
         out.push_str(&sql[last..call.start]);
         let slots = parse_arg_list(&call.args_inner, &is_func)?;
-        let replacement = match eval_call(&call.name, slots, conn, registry, counter)? {
+        let replacement = match eval_call(&call.name, slots, conn, registry, counter, None, opts)? {
             CallResult::Table(t) => t,
             CallResult::Scalar(s) => sql_quote(&s),
         };
@@ -174,10 +223,11 @@ pub fn eval_standalone(
     conn: &mut Connection,
     registry: &Registry,
     counter: &mut usize,
+    opts: &SyntaxOpts,
 ) -> Result<CallOut> {
     let is_func = |n: &str| registry.is_func(n);
     let slots = parse_arg_list(args_inner, &is_func)?;
-    match eval_call(name, slots, conn, registry, counter)? {
+    match eval_call(name, slots, conn, registry, counter, None, opts)? {
         CallResult::Table(t) => Ok(CallOut::Table(t)),
         CallResult::Scalar(s) => Ok(CallOut::Scalar(s)),
     }
@@ -247,7 +297,7 @@ mod tests {
     fn skips_strings_and_comments() {
         let (mut conn, reg, mut c) = sess();
         let sql = "SELECT 'read_csv(\"x\")' AS a -- read_csv('y')\nFROM mock_data(1, 'id:name')";
-        let out = rewrite_sql(sql, &mut conn, &reg, &mut c).unwrap();
+        let out = rewrite_sql(sql, &mut conn, &reg, &mut c, &SyntaxOpts::default()).unwrap();
         assert!(out.contains("excel_tmp_0"), "{out}");
         assert!(out.contains("read_csv"), "{out}");
     }
@@ -257,7 +307,7 @@ mod tests {
         // mock 不嵌套文件；用 parse 保证括号匹配
         let sql = "SELECT * FROM mock_data(2, '用户:name', '城:city')";
         let (mut conn, reg, mut c) = sess();
-        let out = rewrite_sql(sql, &mut conn, &reg, &mut c).unwrap();
+        let out = rewrite_sql(sql, &mut conn, &reg, &mut c, &SyntaxOpts::default()).unwrap();
         assert_eq!(out.trim(), "SELECT * FROM excel_tmp_0");
     }
 

@@ -1,8 +1,9 @@
 use crate::engine::{handle_output, handle_text_output};
 use crate::functions::Registry;
 use crate::rewrite::{
-    eval_standalone, is_query, parse_standalone_call, rewrite_sql, split_statements, CallOut,
+    eval_source, eval_standalone, is_query, parse_standalone_call, rewrite_sql, CallOut,
 };
+use crate::syntax::{parse_script, ScriptStmt, SyntaxOpts};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -11,10 +12,15 @@ pub struct Session {
     conn: Connection,
     registry: Registry,
     table_counter: usize,
+    opts: SyntaxOpts,
 }
 
 impl Session {
     pub fn new() -> Result<Self> {
+        Self::with_opts(SyntaxOpts::default())
+    }
+
+    pub fn with_opts(opts: SyntaxOpts) -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "synchronous", "OFF")?;
         conn.pragma_update(None, "temp_store", "MEMORY")?;
@@ -24,6 +30,7 @@ impl Session {
             conn,
             registry: Registry::builtin(),
             table_counter: 0,
+            opts,
         })
     }
 
@@ -36,25 +43,64 @@ impl Session {
             return self.emit_call(&name, &args_inner, output, explain);
         }
 
-        let rewritten = rewrite_sql(sql, &mut self.conn, &self.registry, &mut self.table_counter)?;
-        if explain {
-            eprintln!("-- rewritten SQL --\n{}\n-------------------", rewritten);
-        }
-        let stmts = split_statements(&rewritten)?;
-        let (head, last) = stmts.split_at(stmts.len() - 1);
-        for s in head {
-            self.conn
-                .execute_batch(s)
-                .with_context(|| format!("执行语句失败:\n{}", s))?;
-        }
-        let last = last[0].as_str();
-        if is_query(last) {
-            handle_output(&self.conn, last, output)?;
-        } else {
-            self.conn
-                .execute_batch(last)
-                .with_context(|| format!("执行语句失败:\n{}", last))?;
-            println!("✅ 语句已执行。");
+        let stmts = parse_script(sql)?;
+        let last_idx = stmts.len() - 1;
+        for (i, stmt) in stmts.into_iter().enumerate() {
+            let is_last = i == last_idx;
+            match stmt {
+                ScriptStmt::Load { name, source } => {
+                    if explain {
+                        eprintln!("-- LOAD {} --", name);
+                    }
+                    match eval_source(
+                        &source,
+                        Some(name.clone()),
+                        &mut self.conn,
+                        &self.registry,
+                        &mut self.table_counter,
+                        &self.opts,
+                    )? {
+                        CallOut::Table(t) => {
+                            if is_last {
+                                let q = format!("SELECT * FROM {}", t);
+                                handle_output(&self.conn, &q, output)?;
+                            }
+                        }
+                        CallOut::Scalar(txt) => {
+                            if is_last {
+                                handle_text_output(&txt, output)?;
+                            } else {
+                                anyhow::bail!(
+                                    "LOAD {} 得到的是文本而不是表，不能继续后续语句",
+                                    name
+                                );
+                            }
+                        }
+                    }
+                }
+                ScriptStmt::Query(q) => {
+                    let rewritten = rewrite_sql(
+                        &q,
+                        &mut self.conn,
+                        &self.registry,
+                        &mut self.table_counter,
+                        &self.opts,
+                    )?;
+                    if explain {
+                        eprintln!("-- rewritten SQL --\n{}\n-------------------", rewritten);
+                    }
+                    if is_last && is_query(&rewritten) {
+                        handle_output(&self.conn, &rewritten, output)?;
+                    } else {
+                        self.conn
+                            .execute_batch(&rewritten)
+                            .with_context(|| format!("执行语句失败:\n{}", rewritten))?;
+                        if is_last {
+                            println!("✅ 语句已执行。");
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -83,6 +129,7 @@ impl Session {
             &mut self.conn,
             &self.registry,
             &mut self.table_counter,
+            &self.opts,
         )? {
             CallOut::Table(t) => {
                 let sql = format!("SELECT * FROM {}", t);

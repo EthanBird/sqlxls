@@ -3,6 +3,7 @@ use rust_xlsxwriter::Workbook;
 use sqlxls::functions::Registry;
 use sqlxls::rewrite::rewrite_sql;
 use sqlxls::session::Session;
+use sqlxls::syntax::SyntaxOpts;
 use std::fs;
 use std::path::PathBuf;
 
@@ -72,7 +73,7 @@ fn json_union_keys_and_path() {
         "SELECT * FROM read_json('{}', json_path='data')",
         json.display()
     );
-    let rewritten = rewrite_sql(&sql, &mut conn, &reg, &mut c).unwrap();
+    let rewritten = rewrite_sql(&sql, &mut conn, &reg, &mut c, &SyntaxOpts::default()).unwrap();
     let stmt = conn.prepare(&rewritten).unwrap();
     let names = stmt.column_names();
     assert!(names.contains(&"id"), "{names:?}");
@@ -129,7 +130,7 @@ fn nested_read_text_into_csv() {
         "SELECT * FROM read_csv(read_text('{}')) WHERE x = 3",
         pointer.display()
     );
-    let rewritten = rewrite_sql(&sql, &mut conn, &reg, &mut c).unwrap();
+    let rewritten = rewrite_sql(&sql, &mut conn, &reg, &mut c, &SyntaxOpts::default()).unwrap();
     assert!(rewritten.contains("excel_tmp_"), "{}", rewritten);
     let n: i64 = conn
         .query_row(&rewritten, [], |r| r.get(0))
@@ -206,4 +207,62 @@ fn json_output_streaming_file() {
     s.run_sql(&sql, Some(&out), false).unwrap();
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
     assert_eq!(v[0]["name"], "a");
+}
+
+#[test]
+fn load_then_standard_sql() {
+    let dir = temp_dir();
+    let csv = dir.join("t.csv");
+    fs::write(&csv, "id,n\n1,10\n2,20\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD nums FROM '{p}'; SELECT SUM(n) AS s FROM nums;",
+        p = csv.display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let sum: i64 = s
+        .connection()
+        .query_row("SELECT SUM(n) FROM nums", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sum, 30);
+}
+
+#[test]
+fn load_with_named_options() {
+    let dir = temp_dir();
+    let csv = dir.join("t.csv");
+    fs::write(&csv, "skipme\nid,name\n1,a\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD t FROM '{}' WITH (format='csv', skip=1); SELECT name FROM t",
+        csv.display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let name: String = s
+        .connection()
+        .query_row("SELECT name FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "a");
+}
+
+#[test]
+fn strict_rejects_positional_options() {
+    let dir = temp_dir();
+    let csv = dir.join("t.csv");
+    fs::write(&csv, "id,name\n1,a\n").unwrap();
+    let mut s = Session::with_opts(SyntaxOpts { strict: true }).unwrap();
+    let sql = format!("SELECT * FROM read_csv('{}', ',')", csv.display());
+    let err = s.run_sql(&sql, None, false).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("strict") || msg.contains("命名参数"), "{msg}");
+}
+
+#[test]
+fn strict_allows_named_options() {
+    let dir = temp_dir();
+    let csv = dir.join("t.csv");
+    fs::write(&csv, "id,name\n1,a\n").unwrap();
+    let mut s = Session::with_opts(SyntaxOpts { strict: true }).unwrap();
+    let sql = format!("SELECT * FROM read('{}', format='csv')", csv.display());
+    s.run_sql(&sql, None, false).unwrap();
 }

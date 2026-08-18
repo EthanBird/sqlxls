@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use sqlxls::session::{load_sql_input, Session};
+use sqlxls::syntax::SyntaxOpts;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -25,11 +26,17 @@ struct Cli {
     /// 打印改写后的 SQL / 函数调用后再执行
     #[arg(long = "explain")]
     explain: bool,
+
+    /// 除定位符外必须使用命名参数（syntax=1 的严格模式）
+    #[arg(long = "strict")]
+    strict: bool,
 }
 
 fn main() -> Result<()> {
     let args = Cli::parse();
-    let mut session = Session::new()?;
+    let mut session = Session::with_opts(SyntaxOpts {
+        strict: args.strict,
+    })?;
 
     if let Some(func_call) = args.func {
         session.run_func(&func_call, args.output.as_ref(), args.explain)?;
