@@ -32,6 +32,19 @@ cargo build --release
 
 可执行文件在 `target/release/sqlxls`。
 
+## AI Agent 技能包
+
+仓库内有一份给 Agent 用的技能包：[`skills/sqlxls-data`](skills/sqlxls-data)。  
+本仓库通过 `.agents/skills/sqlxls-data` 链接，Cursor / Claude / Codex 会自动发现。
+
+拷到其它项目：
+
+```bash
+cp -R skills/sqlxls-data <other-repo>/.agents/skills/sqlxls-data
+```
+
+Agent 应用它来：探测 schema、写 `LOAD` + 标准 SQL、用 `--strict` 执行并 `-o` 导出。说明见 [`skills/README.md`](skills/README.md)。
+
 ## 用法
 
 ```bash
@@ -194,4 +207,4 @@ sqlxls "SELECT * FROM read_csv('data.csv')" -o result.ndjson
 - [ ] HTTP 分页、REPL、`--schema`
 - [ ] Parquet 输出；可选 DuckDB 引擎
 - [ ] `read_sql`（Postgres / MySQL 只读）
-- [ ] GitHub Actions 预编译 Windows / macOS / Linux 二进制
+- [x] GitHub Actions 预编译 Windows / macOS / Linux 二进制
