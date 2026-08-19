@@ -250,7 +250,11 @@ fn strict_rejects_positional_options() {
     let dir = temp_dir();
     let csv = dir.join("t.csv");
     fs::write(&csv, "id,name\n1,a\n").unwrap();
-    let mut s = Session::with_opts(SyntaxOpts { strict: true }).unwrap();
+    let mut s = Session::with_opts(SyntaxOpts {
+        strict: true,
+        ..Default::default()
+    })
+    .unwrap();
     let sql = format!("SELECT * FROM read_csv('{}', ',')", csv.display());
     let err = s.run_sql(&sql, None, false).unwrap_err();
     let msg = format!("{err:#}");
@@ -262,7 +266,80 @@ fn strict_allows_named_options() {
     let dir = temp_dir();
     let csv = dir.join("t.csv");
     fs::write(&csv, "id,name\n1,a\n").unwrap();
-    let mut s = Session::with_opts(SyntaxOpts { strict: true }).unwrap();
+    let mut s = Session::with_opts(SyntaxOpts {
+        strict: true,
+        ..Default::default()
+    })
+    .unwrap();
+    let sql = format!("SELECT * FROM read('{}', format='csv')", csv.display());
+    s.run_sql(&sql, None, false).unwrap();
+}
+
+#[test]
+fn table_fn_in_select_is_rejected() {
+    let dir = temp_dir();
+    let csv = dir.join("t.csv");
+    fs::write(&csv, "id,name\n1,a\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!("SELECT read_csv('{}')", csv.display());
+    let err = s.run_sql(&sql, None, false).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("FROM") || msg.contains("LOAD"), "{msg}");
+}
+
+#[test]
+fn read_text_cannot_be_a_table() {
+    let dir = temp_dir();
+    let txt = dir.join("p.txt");
+    fs::write(&txt, "hello").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!("SELECT * FROM read_text('{}')", txt.display());
+    let err = s.run_sql(&sql, None, false).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("标量") || msg.contains("不能当作表"), "{msg}");
+}
+
+#[test]
+fn unknown_option_is_error() {
+    let dir = temp_dir();
+    let csv = dir.join("t.csv");
+    fs::write(&csv, "id,name\n1,a\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "SELECT * FROM read('{}', format='csv', foo=1)",
+        csv.display()
+    );
+    let err = s.run_sql(&sql, None, false).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("foo"), "{msg}");
+}
+
+#[test]
+fn syntax2_rejects_sugar_in_query() {
+    let dir = temp_dir();
+    let csv = dir.join("t.csv");
+    fs::write(&csv, "id,name\n1,a\n").unwrap();
+    let mut s = Session::with_opts(SyntaxOpts {
+        version: 2,
+        strict: false,
+    })
+    .unwrap();
+    let sql = format!("SELECT * FROM read_csv('{}')", csv.display());
+    let err = s.run_sql(&sql, None, false).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("syntax=2") || msg.contains("read()"), "{msg}");
+}
+
+#[test]
+fn syntax2_allows_canonical_read() {
+    let dir = temp_dir();
+    let csv = dir.join("t.csv");
+    fs::write(&csv, "id,name\n1,a\n").unwrap();
+    let mut s = Session::with_opts(SyntaxOpts {
+        version: 2,
+        strict: true,
+    })
+    .unwrap();
     let sql = format!("SELECT * FROM read('{}', format='csv')", csv.display());
     s.run_sql(&sql, None, false).unwrap();
 }

@@ -7,6 +7,7 @@ use crate::functions::read_excel::ReadExcelExt;
 use crate::functions::read_json::ReadJsonExt;
 use crate::functions::read_text::ReadTextExt;
 use crate::functions::{ExecCtx, FuncOutput, TableFunction};
+use crate::syntax::infer_format;
 use anyhow::bail;
 
 /// `read()`：规范数据源构造器。按 `format=` 或 locator 分发。
@@ -23,7 +24,8 @@ impl TableFunction for ReadAutoExt {
             .get_str(99, &["format", "fmt"])
             .map(|s| s.to_ascii_lowercase())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| infer_format(&src));
+            .or_else(|| infer_format(&src))
+            .unwrap_or_default();
         if fmt.is_empty() {
             anyhow::bail!(
                 "无法从 `{}` 推断 format，请显式写 format='excel'|'csv'|'json'|'http'",
@@ -48,36 +50,6 @@ impl TableFunction for ReadAutoExt {
             ),
         }
     }
-}
-
-fn infer_format(src: &str) -> String {
-    let lower = src.to_ascii_lowercase();
-    if lower == "clip:" || lower == "clipboard:" || lower.starts_with("clip:") {
-        return "clipboard".into();
-    }
-    if lower.starts_with("glob:") {
-        return "glob".into();
-    }
-    if lower.starts_with("http://") || lower.starts_with("https://") {
-        return "http".into();
-    }
-    if lower.contains('*') || lower.contains('?') {
-        return "glob".into();
-    }
-    if let Some(ext) = std::path::Path::new(src)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-    {
-        return match ext.as_str() {
-            "xlsx" | "xls" | "xlsm" => "excel".into(),
-            "csv" | "tsv" => "csv".into(),
-            "json" => "json".into(),
-            "txt" => "text".into(),
-            other => other.to_string(),
-        };
-    }
-    String::new()
 }
 
 fn rewrite_locator(args: &mut Args, src: &str, fmt: &str) {

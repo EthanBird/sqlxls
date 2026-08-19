@@ -30,11 +30,16 @@ struct Cli {
     /// 除定位符外必须使用命名参数（syntax=1 的严格模式）
     #[arg(long = "strict")]
     strict: bool,
+
+    /// 语言版本：1=兼容糖函数；2=查询层只允许 read()/LOAD
+    #[arg(long = "syntax", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
+    syntax: u8,
 }
 
 fn main() -> Result<()> {
     let args = Cli::parse();
     let mut session = Session::with_opts(SyntaxOpts {
+        version: args.syntax,
         strict: args.strict,
     })?;
 

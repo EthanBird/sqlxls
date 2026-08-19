@@ -2,8 +2,12 @@ use crate::args::{
     matching_paren, parse_arg_list, parse_call_head, parse_ident, skip_sql_noise, skip_ws,
     sql_quote, ArgExpr, ArgSlot, Args, Value,
 };
+use crate::classify::{self, SourcePlace};
 use crate::functions::{ExecCtx, FuncOutput, Registry};
-use crate::syntax::{validate_source_args, SourceSpec, SyntaxOpts};
+use crate::syntax::{
+    desugar_call, is_scalar_source, resolve_format, validate_closed_options,
+    validate_query_source_name, validate_source_args, SourceSpec, SyntaxOpts,
+};
 use anyhow::{bail, Result};
 use rusqlite::Connection;
 
@@ -112,7 +116,20 @@ fn eval_call(
     dest: Option<String>,
     opts: &SyntaxOpts,
 ) -> Result<CallResult> {
-    validate_source_args(name, &slots, opts.strict)?;
+    validate_source_args(name, &slots, opts)?;
+    if !matches!(name.to_ascii_lowercase().as_str(), "mock_data" | "mockdata") {
+        if let Some(fmt) = resolve_format(name, &slots) {
+            let keys: Vec<String> = slots
+                .iter()
+                .filter_map(|s| match s {
+                    ArgSlot::Named(k, _) => Some(k.clone()),
+                    _ => None,
+                })
+                .collect();
+            validate_closed_options(&fmt, keys)?;
+        }
+    }
+    let (name, slots) = desugar_call(name, slots);
     let args = eval_arg_slots(slots, conn, registry, counter, opts)?;
     let dest = dest.unwrap_or_else(|| {
         let t = format!("excel_tmp_{}", *counter);
@@ -123,7 +140,7 @@ fn eval_call(
         conn,
         dest_table: dest.clone(),
     };
-    match registry.execute(&mut ctx, name, &args)? {
+    match registry.execute(&mut ctx, &name, &args)? {
         FuncOutput::Table => Ok(CallResult::Table(dest)),
         FuncOutput::Scalar(s) => Ok(CallResult::Scalar(s)),
     }
@@ -180,20 +197,94 @@ pub fn rewrite_sql(
         return Ok(sql.to_string());
     }
     calls.sort_by_key(|c| c.start);
+
+    let places = classify_calls(sql, &calls, opts)?;
+
     let mut out = String::with_capacity(sql.len());
     let mut last = 0;
-    for call in calls {
+    for (idx, call) in calls.iter().enumerate() {
         out.push_str(&sql[last..call.start]);
         let slots = parse_arg_list(&call.args_inner, &is_func)?;
-        let replacement = match eval_call(&call.name, slots, conn, registry, counter, None, opts)? {
-            CallResult::Table(t) => t,
-            CallResult::Scalar(s) => sql_quote(&s),
-        };
+        let place = places.get(idx).copied().unwrap_or(SourcePlace::Unknown);
+        let replacement =
+            rewrite_one_call(&call.name, slots, place, conn, registry, counter, opts)?;
         out.push_str(&replacement);
         last = call.end;
     }
     out.push_str(&sql[last..]);
     Ok(out)
+}
+
+fn classify_calls(sql: &str, calls: &[TopCall], opts: &SyntaxOpts) -> Result<Vec<SourcePlace>> {
+    let mut stubbed = sql.to_string();
+    for (i, call) in calls.iter().enumerate().rev() {
+        stubbed.replace_range(call.start..call.end, &classify::stub_name(i));
+    }
+    match classify::classify_source_places(&stubbed, calls.len()) {
+        Ok(places) => {
+            if opts.effective_strict() {
+                classify::require_classified(&places, true)?;
+            }
+            Ok(places)
+        }
+        Err(err) => {
+            if opts.effective_strict() {
+                Err(err)
+            } else {
+                eprintln!("⚠️  {err}；syntax=1 回退为按出现顺序物化源。");
+                Ok(vec![SourcePlace::Table; calls.len()])
+            }
+        }
+    }
+}
+
+fn rewrite_one_call(
+    name: &str,
+    slots: Vec<ArgSlot>,
+    place: SourcePlace,
+    conn: &mut Connection,
+    registry: &Registry,
+    counter: &mut usize,
+    opts: &SyntaxOpts,
+) -> Result<String> {
+    let scalar = is_scalar_source(name, &slots);
+    match place {
+        SourcePlace::Table | SourcePlace::Unknown => {
+            if scalar {
+                bail!(
+                    "标量源 `{}` 不能当作表；只能出现在另一个 read()/LOAD 的参数里",
+                    name
+                );
+            }
+            validate_query_source_name(name, opts)?;
+            match eval_call(name, slots, conn, registry, counter, None, opts)? {
+                CallResult::Table(t) => Ok(t),
+                CallResult::Scalar(s) => Ok(sql_quote(&s)),
+            }
+        }
+        SourcePlace::Expr => {
+            if !scalar {
+                bail!(
+                    "表函数 `{}` 只能出现在 FROM/JOIN 或 LOAD 中，不能写在 SELECT/WHERE 表达式里",
+                    name
+                );
+            }
+            if !opts.allow_expr_scalars() {
+                bail!(
+                    "syntax strict：`{}` 是标量源，不能写在查询表达式里；请放进 LOAD / read() 的参数",
+                    name
+                );
+            }
+            eprintln!(
+                "⚠️  查询表达式里的 `{}` 已废弃，请改为 LOAD 参数或 read(...) 嵌套调用",
+                name
+            );
+            match eval_call(name, slots, conn, registry, counter, None, opts)? {
+                CallResult::Scalar(s) => Ok(sql_quote(&s)),
+                CallResult::Table(t) => Ok(t),
+            }
+        }
+    }
 }
 
 /// 若整段输入就是一个表函数调用（可带末尾分号），返回它。

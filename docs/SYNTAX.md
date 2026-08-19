@@ -232,3 +232,19 @@ Query 层因此可以是 SQLite，也可以是 DuckDB，**不必带着 `read_exc
 
 这是语法稳定真正要买到的东西：  
 **用户脚本的查询部分是标准 SQL，数据源部分是一份短文法。** 两者各自进化，互不绑架。
+
+---
+
+## 9. 当前落地（对照本文）
+
+| 规范 | 状态 |
+|------|------|
+| `LOAD … FROM locator WITH (命名选项)` | 已实现 |
+| 规范 `read(locator, format=…, 命名选项)` | 已实现 |
+| 糖函数 desugar 到 `read(..., format=…)` | 已实现 |
+| `--syntax=1` / `--syntax=2` / `--strict` | 已实现 |
+| 未列出的选项报错（关闭选项集） | 已实现 |
+| `read_text` 不能当表 | 已实现 |
+| 表函数只能出现在 FROM/JOIN（SQL 解析器判定） | 已实现 |
+| SELECT/WHERE 里的表函数报错；标量表达式仅 syntax=1 非 strict 警告 | 已实现 |
+| syntax=2：查询层只允许 `read()` / `mock_data()` | 已实现 |

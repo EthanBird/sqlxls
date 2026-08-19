@@ -10,7 +10,7 @@
 - **推荐**：`LOAD 表 FROM '文件' WITH (...)` 绑定数据源，后面写标准 SQL
 - 一行探索：把 `read(...)` 写在 `FROM` 里（糖）
 - 嵌套调用：`read_csv(read_text('path.txt'))`，内层先求值，不会把文件内容拼进 SQL
-- `--strict`：除定位符外必须用命名参数
+- `--strict`：除定位符外必须用命名参数；`--syntax=2` 查询层只允许 `read()` / `LOAD`
 - 导出终端表 / CSV / JSON / NDJSON / xlsx
 
 ## 安装
@@ -31,6 +31,7 @@ sqlxls query.sql [-o 输出文件]
 sqlxls -f "read_api('https://example.com/data.json')"
 sqlxls "SELECT ..." --explain    # 打印改写后的 SQL
 sqlxls script.sql --strict      # 禁止位置参数超载
+sqlxls script.sql --syntax=2    # 查询层只允许 read() / LOAD
 ```
 
 ### 0. 推荐：先 LOAD，再写标准 SQL
