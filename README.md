@@ -15,7 +15,16 @@
 
 ## 安装
 
-需要较新的稳定版 Rust（建议 1.88+）：
+从 [GitHub Releases](https://github.com/EthanBird/sqlxls/releases) 下载对应平台的可执行文件，放到 `PATH` 里：
+
+| 平台 | 文件 |
+|------|------|
+| Linux x86_64 | `sqlxls-x86_64-unknown-linux-gnu` |
+| macOS Apple Silicon | `sqlxls-aarch64-apple-darwin` |
+| macOS Intel | `sqlxls-x86_64-apple-darwin` |
+| Windows x86_64 | `sqlxls-x86_64-pc-windows-msvc.exe` |
+
+或从源码编译（建议 Rust 1.88+）：
 
 ```bash
 cargo build --release

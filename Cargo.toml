@@ -5,6 +5,16 @@ edition = "2021"
 rust-version = "1.88"
 description = "用 SQL 清理和分析 Excel / CSV / JSON / HTTP 等表格数据"
 license = "MIT"
+repository = "https://github.com/EthanBird/sqlxls"
+homepage = "https://github.com/EthanBird/sqlxls"
+readme = "README.md"
+keywords = ["sql", "excel", "csv", "cli"]
+categories = ["command-line-utilities"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
