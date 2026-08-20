@@ -76,7 +76,7 @@ for_vars        = ident { "," ident }
 
 for_domain      = "(" value { "," value } ")"
                 | integer ".." integer [ "STEP" integer ]
-                | [ "DATE" ] range_bound ".." range_bound [ "STEP" date_step ]
+                | "DATE" range_bound ".." range_bound [ "STEP" date_step ]
                 | "GLOB" locator ;
 
 range_bound     = integer | string ;    (* 日：2024-01-15 / 20240115；月：2024-01 / 202401 *)

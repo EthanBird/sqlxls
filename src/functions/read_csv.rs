@@ -18,6 +18,7 @@ impl TableFunction for ReadCsvExt {
         let delim = args
             .get_str(1, &["delim", "delimiter", "sep"])
             .map(|s| parse_delim(&s));
+        let encoding = args.get_str(99, &["encoding", "charset"]);
         load_csv_path(
             ctx.conn,
             &ctx.dest_table,
@@ -26,6 +27,7 @@ impl TableFunction for ReadCsvExt {
             skip,
             force_str,
             false,
+            encoding.as_deref(),
         )?;
         Ok(FuncOutput::Table)
     }
@@ -103,8 +105,10 @@ pub fn load_csv_path(
     skip: usize,
     force_str: bool,
     append: bool,
+    encoding: Option<&str>,
 ) -> Result<usize> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("无法读取 CSV: {}", path))?;
+    let bytes = std::fs::read(path).with_context(|| format!("无法读取 CSV: {}", path))?;
+    let text = crate::encoding::decode_bytes(&bytes, encoding)?;
     let delim = delim.or_else(|| {
         Path::new(path)
             .extension()

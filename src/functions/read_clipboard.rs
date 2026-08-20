@@ -16,6 +16,7 @@ impl TableFunction for ReadClipboardExt {
 
     fn execute(&self, ctx: &mut ExecCtx, args: &Args) -> Result<FuncOutput> {
         let force_str = args.get_bool(0, &["str", "force_str"]);
+        let encoding = args.get_str(99, &["encoding", "charset"]);
         let delim = args
             .get_str(1, &["delim", "delimiter", "sep"])
             .map(|s| parse_delim(&s));
@@ -48,7 +49,8 @@ impl TableFunction for ReadClipboardExt {
                     return Ok(FuncOutput::Table);
                 } else if ext == "csv" || ext == "txt" || ext == "tsv" {
                     println!("📁 剪贴板捕获到文本类文件: {}", file_path);
-                    text_data = std::fs::read_to_string(file_path)?;
+                    let bytes = std::fs::read(file_path)?;
+                    text_data = crate::encoding::decode_bytes(&bytes, encoding.as_deref())?;
                 }
             }
         }

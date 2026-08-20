@@ -25,8 +25,9 @@ impl TableFunction for ReadJsonExt {
                 }
             })
             .unwrap_or_default();
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("无法读取 JSON 文件: {}", path))?;
+        let encoding = args.get_str(99, &["encoding", "charset"]);
+        let bytes = fs::read(&path).with_context(|| format!("无法读取 JSON 文件: {}", path))?;
+        let content = crate::encoding::decode_bytes(&bytes, encoding.as_deref())?;
         let value: Value = serde_json::from_str(&content).context("JSON 格式不合法")?;
         json_to_table(ctx.conn, &ctx.dest_table, &value, &json_path, false)?;
         Ok(FuncOutput::Table)

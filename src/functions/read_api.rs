@@ -37,6 +37,23 @@ impl TableFunction for ReadApiExt {
             .get_str(99, &["offset_param"])
             .filter(|s| !s.is_empty());
         let add_meta = crate::ingest::include_source(args);
+        let format = args.get_str(99, &["format", "fmt"]);
+        let encoding = args.get_str(99, &["encoding", "charset"]);
+        let sheet = args.get_str(99, &["sheet"]);
+        let skip = args.get_usize(99, &["skip", "skiprows", "skip_rows"], 0);
+        let delim = args
+            .get_str(99, &["delim", "delimiter", "sep"])
+            .map(|s| crate::functions::read_csv::parse_delim(&s));
+        let force_str = args.get_bool(99, &["str", "force_str"]);
+        let body = HttpBodyOpts {
+            format: format.as_deref(),
+            encoding: encoding.as_deref(),
+            json_path: json_path.as_str(),
+            sheet: sheet.as_deref(),
+            skip,
+            delim,
+            force_str,
+        };
 
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -56,7 +73,7 @@ impl TableFunction for ReadApiExt {
                 &bytes,
                 &content_type,
                 &url,
-                &json_path,
+                body,
                 false,
                 &[],
             )?;
@@ -103,7 +120,7 @@ impl TableFunction for ReadApiExt {
                     &bytes,
                     &content_type,
                     &page_url,
-                    &json_path,
+                    body,
                     !first,
                     &extras,
                 )?;
@@ -135,7 +152,7 @@ impl TableFunction for ReadApiExt {
                     &bytes,
                     &content_type,
                     &page_url,
-                    &json_path,
+                    body,
                     !first,
                     &extras,
                 )?;
@@ -285,18 +302,47 @@ pub fn expand_env(s: &str) -> String {
     out
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct HttpBodyOpts<'a> {
+    pub format: Option<&'a str>,
+    pub encoding: Option<&'a str>,
+    pub json_path: &'a str,
+    pub sheet: Option<&'a str>,
+    pub skip: usize,
+    pub delim: Option<u8>,
+    pub force_str: bool,
+}
+
+impl<'a> HttpBodyOpts<'a> {
+    pub fn new() -> Self {
+        Self {
+            format: None,
+            encoding: None,
+            json_path: "",
+            sheet: None,
+            skip: 0,
+            delim: None,
+            force_str: false,
+        }
+    }
+}
+
 pub fn ingest_http_bytes(
     conn: &mut rusqlite::Connection,
     table: &str,
     bytes: &[u8],
     content_type: &str,
     url: &str,
-    json_path: &str,
+    opts: HttpBodyOpts<'_>,
     append: bool,
     extras: &[(String, String)],
 ) -> Result<usize> {
     let url_l = url.to_ascii_lowercase();
-    let trimmed = trim_utf8_bom(bytes);
+    let trimmed = crate::encoding::trim_utf8_bom(bytes);
+    let forced = opts
+        .format
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| !matches!(s.as_str(), "http" | "https" | "api" | ""));
 
     if looks_like_html(content_type, trimmed) {
         let snippet: String = String::from_utf8_lossy(trimmed).chars().take(200).collect();
@@ -306,79 +352,89 @@ pub fn ingest_http_bytes(
         );
     }
 
-    let mut headers_rows: Option<(Vec<String>, Vec<Vec<Cell>>)> = None;
-    let force_str = false;
-
-    if content_type.contains("json") || url_l.ends_with(".json") || looks_like_json(trimmed) {
-        let json_val: serde_json::Value =
-            serde_json::from_slice(trimmed).context("API 返回的数据不是合法的 JSON")?;
-        let extracted = extract_json_path(&json_val, json_path)?;
-        let table_val = if json_path.trim().is_empty() {
-            default_table_value(extracted)
-        } else {
-            extracted
-        };
-        headers_rows = Some(value_to_rows(table_val)?);
-    } else if content_type.contains("csv") || url_l.ends_with(".csv") || url_l.ends_with(".tsv") {
-        let text = std::str::from_utf8(trimmed).context("CSV 不是合法 UTF-8")?;
-        let delim = if url_l.ends_with(".tsv") {
-            Some(b'\t')
-        } else {
-            None
-        };
-        return ingest_csv_with_extras(conn, table, text, delim, append, extras);
-    } else if is_xlsx_magic(trimmed)
+    let excel_hint = is_xlsx_magic(trimmed)
         || is_xls_magic(trimmed)
         || content_type.contains("spreadsheet")
         || content_type.contains("excel")
         || url_l.ends_with(".xlsx")
         || url_l.ends_with(".xls")
-        || url_l.ends_with(".xlsm")
-    {
-        let ext = if is_xls_magic(trimmed) { "xls" } else { "xlsx" };
-        let mut temp_path = env::temp_dir();
-        temp_path.push(format!(
-            "sqlxls_temp_api_{}.{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_millis(),
-            ext
-        ));
-        let mut temp_file = File::create(&temp_path)?;
-        temp_file.write_all(bytes)?;
-        temp_file.flush()?;
-        let frame = excel_to_frame(temp_path.to_str().unwrap(), None, 0, false)?;
-        let _ = std::fs::remove_file(&temp_path);
-        headers_rows = Some(frame);
-    } else if let Ok(text) = std::str::from_utf8(trimmed) {
-        if looks_like_json(trimmed) {
-            let json_val: serde_json::Value = serde_json::from_str(text)?;
-            let extracted = extract_json_path(&json_val, json_path)?;
-            let table_val = if json_path.trim().is_empty() {
-                default_table_value(extracted)
-            } else {
-                extracted
-            };
-            headers_rows = Some(value_to_rows(table_val)?);
-        } else {
-            return ingest_csv_with_extras(conn, table, text, None, append, extras).with_context(
-                || {
-                    format!(
-                        "无法把 API 响应识别为 JSON / CSV / Excel（Content-Type: {}）",
-                        content_type
-                    )
-                },
-            );
-        }
+        || url_l.ends_with(".xlsm");
+    let as_excel = forced.as_deref() == Some("excel")
+        || forced.as_deref() == Some("xlsx")
+        || forced.as_deref() == Some("xls")
+        || (forced.is_none() && excel_hint);
+
+    if as_excel {
+        return ingest_excel_bytes(conn, table, bytes, trimmed, opts, append, extras);
     }
 
-    let Some((mut headers, mut rows)) = headers_rows else {
-        bail!(
-            "无法识别的 API 响应类型（Content-Type: {}，{} 字节）",
-            content_type,
-            bytes.len()
-        );
+    let as_json = forced.as_deref() == Some("json")
+        || (forced.is_none()
+            && (content_type.contains("json")
+                || url_l.ends_with(".json")
+                || looks_like_json(trimmed)));
+    let as_csv = forced.as_deref() == Some("csv")
+        || forced.as_deref() == Some("tsv")
+        || (forced.is_none()
+            && (content_type.contains("csv")
+                || url_l.ends_with(".csv")
+                || url_l.ends_with(".tsv")));
+
+    let text = crate::encoding::decode_http(trimmed, opts.encoding, content_type)?;
+
+    if as_json || (forced.is_none() && looks_like_json(trimmed)) {
+        return ingest_json_text(conn, table, &text, opts.json_path, append, extras);
+    }
+    if as_csv || forced.is_none() {
+        let delim = opts.delim.or_else(|| {
+            if url_l.ends_with(".tsv") || forced.as_deref() == Some("tsv") {
+                Some(b'\t')
+            } else {
+                None
+            }
+        });
+        return ingest_csv_with_extras(
+            conn,
+            table,
+            &text,
+            delim,
+            opts.skip,
+            opts.force_str,
+            append,
+            extras,
+        )
+        .with_context(|| {
+            format!(
+                "无法把 API 响应识别为 JSON / CSV / Excel（Content-Type: {}）",
+                content_type
+            )
+        });
+    }
+
+    bail!(
+        "无法识别的 API 响应类型（Content-Type: {}，{} 字节）。可显式写 format='json'|'csv'|'excel'，文本编码用 encoding='gbk'",
+        content_type,
+        bytes.len()
+    );
+}
+
+fn ingest_json_text(
+    conn: &mut rusqlite::Connection,
+    table: &str,
+    text: &str,
+    json_path: &str,
+    append: bool,
+    extras: &[(String, String)],
+) -> Result<usize> {
+    let json_val: serde_json::Value =
+        serde_json::from_str(text).context("API 返回的数据不是合法的 JSON")?;
+    let extracted = extract_json_path(&json_val, json_path)?;
+    let table_val = if json_path.trim().is_empty() {
+        default_table_value(extracted)
+    } else {
+        extracted
     };
+    let (mut headers, mut rows) = value_to_rows(table_val)?;
     let n = rows.len();
     for (k, v) in extras {
         attach_const_column(&mut headers, &mut rows, k, Cell::Text(v.clone()));
@@ -388,7 +444,56 @@ pub fn ingest_http_bytes(
         table,
         &headers,
         rows,
-        IngestOpts { force_str, append },
+        IngestOpts {
+            force_str: false,
+            append,
+        },
+    )?;
+    Ok(n)
+}
+
+fn ingest_excel_bytes(
+    conn: &mut rusqlite::Connection,
+    table: &str,
+    bytes: &[u8],
+    trimmed: &[u8],
+    opts: HttpBodyOpts<'_>,
+    append: bool,
+    extras: &[(String, String)],
+) -> Result<usize> {
+    let ext = if is_xls_magic(trimmed) { "xls" } else { "xlsx" };
+    let mut temp_path = env::temp_dir();
+    temp_path.push(format!(
+        "sqlxls_temp_api_{}.{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis(),
+        ext
+    ));
+    let mut temp_file = File::create(&temp_path)?;
+    temp_file.write_all(bytes)?;
+    temp_file.flush()?;
+    let frame = excel_to_frame(
+        temp_path.to_str().unwrap(),
+        opts.sheet,
+        opts.skip,
+        opts.force_str,
+    );
+    let _ = std::fs::remove_file(&temp_path);
+    let (mut headers, mut rows) = frame?;
+    let n = rows.len();
+    for (k, v) in extras {
+        attach_const_column(&mut headers, &mut rows, k, Cell::Text(v.clone()));
+    }
+    ingest_rows(
+        conn,
+        table,
+        &headers,
+        rows,
+        IngestOpts {
+            force_str: opts.force_str,
+            append,
+        },
     )?;
     Ok(n)
 }
@@ -398,25 +503,19 @@ fn ingest_csv_with_extras(
     table: &str,
     text: &str,
     delim: Option<u8>,
+    skip: usize,
+    force_str: bool,
     append: bool,
     extras: &[(String, String)],
 ) -> Result<usize> {
     if extras.is_empty() {
-        return load_csv_text(conn, table, text, delim, 0, false, append);
+        return load_csv_text(conn, table, text, delim, skip, force_str, append);
     }
     let tmp = format!("{table}__page");
-    let n = load_csv_text(conn, &tmp, text, delim, 0, false, false)?;
+    let n = load_csv_text(conn, &tmp, text, delim, skip, force_str, false)?;
     crate::ingest::union_from_table(conn, table, &tmp, extras, append)?;
     conn.execute(&format!("DROP TABLE IF EXISTS {tmp}"), [])?;
     Ok(n)
-}
-
-fn trim_utf8_bom(bytes: &[u8]) -> &[u8] {
-    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        &bytes[3..]
-    } else {
-        bytes
-    }
 }
 
 fn looks_like_json(bytes: &[u8]) -> bool {

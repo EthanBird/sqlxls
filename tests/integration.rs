@@ -205,7 +205,7 @@ fn html_bytes_are_not_excel() {
         b"<!DOCTYPE html><html>nope</html>",
         "text/html",
         "https://example.com/data",
-        "",
+        sqlxls::functions::read_api::HttpBodyOpts::new(),
         false,
         &[],
     )
@@ -572,7 +572,7 @@ fn date_range_for_and_sql_converters() {
     }
     let mut s = Session::new().unwrap();
     let sql = format!(
-        "LOAD t FROM '{}/${{d}}.csv' FOR d IN '2024-01-01'..'2024-01-03';\n\
+        "LOAD t FROM '{}/${{d}}.csv' FOR d IN DATE '2024-01-01'..'2024-01-03';\n\
          SELECT COUNT(*) AS n FROM t",
         dir.display()
     );
@@ -618,4 +618,129 @@ fn date_range_for_and_sql_converters() {
         .query_row("SELECT parse_date('01/02/2024')", [], |r| r.get(0))
         .unwrap();
     assert!(bad.is_none(), "ambiguous D/M must stay NULL without fmt");
+}
+
+fn serve_http_bytes(body: Vec<u8>, content_type: &str) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let ct = content_type.to_string();
+    thread::spawn(move || {
+        for stream in listener.incoming().take(6) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&body);
+        }
+    });
+    format!("http://{addr}/download")
+}
+
+#[test]
+fn local_gbk_csv_needs_encoding() {
+    let dir = temp_dir();
+    let csv = dir.join("gbk.csv");
+    let (bytes, _, _) = encoding_rs::GBK.encode("姓名,数量\n张三,1\n");
+    fs::write(&csv, bytes.as_ref()).unwrap();
+
+    let mut s = Session::new().unwrap();
+    let err = s
+        .run_sql(
+            &format!(
+                "LOAD t FROM '{}' WITH (format='csv'); SELECT * FROM t",
+                csv.display()
+            ),
+            None,
+            false,
+        )
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("encoding='gbk'"), "{err:#}");
+
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!(
+            "LOAD t FROM '{}' WITH (format='csv', encoding='gbk'); SELECT \"姓名\" FROM t",
+            csv.display()
+        ),
+        None,
+        false,
+    )
+    .unwrap();
+    let name: String = s
+        .connection()
+        .query_row("SELECT \"姓名\" FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "张三");
+}
+
+#[test]
+fn http_gbk_csv_charset_and_encoding() {
+    let (bytes, _, _) = encoding_rs::GBK.encode("id,name\n1,李四\n");
+    let body = bytes.into_owned();
+
+    let url = serve_http_bytes(body.clone(), "text/csv; charset=gbk");
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!("LOAD t FROM '{url}' WITH (format='csv'); SELECT name FROM t"),
+        None,
+        false,
+    )
+    .unwrap();
+    let name: String = s
+        .connection()
+        .query_row("SELECT name FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "李四");
+
+    let url = serve_http_bytes(body, "application/octet-stream");
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!("LOAD t FROM '{url}' WITH (format='csv', encoding='gbk'); SELECT name FROM t"),
+        None,
+        false,
+    )
+    .unwrap();
+    let name: String = s
+        .connection()
+        .query_row("SELECT name FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "李四");
+}
+
+#[test]
+fn http_xlsx_binary_octet_stream() {
+    let dir = temp_dir();
+    let xlsx = dir.join("book.xlsx");
+    write_xlsx(&xlsx, &["id", "name"], &[vec!["1", "bin"]]);
+    let bytes = fs::read(&xlsx).unwrap();
+    assert_eq!(
+        &bytes[..4],
+        &[0x50, 0x4B, 0x03, 0x04],
+        "xlsx is zip/pk magic"
+    );
+
+    let url = serve_http_bytes(bytes, "application/octet-stream");
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!("LOAD t FROM '{url}'; SELECT name FROM t"),
+        None,
+        false,
+    )
+    .unwrap();
+    let name: String = s
+        .connection()
+        .query_row("SELECT name FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "bin");
 }

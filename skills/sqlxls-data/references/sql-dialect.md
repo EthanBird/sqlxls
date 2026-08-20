@@ -48,7 +48,7 @@ FROM t;
 
 解析失败返回 NULL，不报错。未知格式名（不是 `iso`/`ymd`/`dmy`/`mdy`/`yyyymmdd` 也没有 `%`）会报错。
 
-按日/月拉多个源不要手写列表，用 Source 层区间：`FOR d IN '2024-01-01'..'2024-01-31'`，见 [dynamic.md](dynamic.md)。
+按日/月拉多个源不要手写列表，用 Source 层区间：`FOR d IN DATE '2024-01-01'..'2024-01-31'`，见 [dynamic.md](dynamic.md)。
 
 空单元格是 NULL。空白字符串不是 NULL：
 

@@ -47,6 +47,7 @@ impl TableFunction for ReadDirExt {
         let json_path = args
             .get_str(99, &["json_path", "pointer"])
             .unwrap_or_default();
+        let encoding = args.get_str(99, &["encoding", "charset"]);
         let add_source = include_source(args);
 
         let mut first = true;
@@ -91,17 +92,28 @@ impl TableFunction for ReadDirExt {
                             skip,
                             force_str,
                             !first,
+                            encoding.as_deref(),
                         )?;
                     } else {
                         let tmp = format!("{}__glob", ctx.dest_table);
-                        load_csv_path(ctx.conn, &tmp, &file_path, delim, skip, force_str, false)?;
+                        load_csv_path(
+                            ctx.conn,
+                            &tmp,
+                            &file_path,
+                            delim,
+                            skip,
+                            force_str,
+                            false,
+                            encoding.as_deref(),
+                        )?;
                         union_from_table(ctx.conn, &ctx.dest_table, &tmp, &extras, !first)?;
                         ctx.conn
                             .execute(&format!("DROP TABLE IF EXISTS {tmp}"), [])?;
                     }
                 }
                 "json" => {
-                    let content = std::fs::read_to_string(&file_path)?;
+                    let bytes = std::fs::read(&file_path)?;
+                    let content = crate::encoding::decode_bytes(&bytes, encoding.as_deref())?;
                     let value: serde_json::Value = serde_json::from_str(&content)?;
                     let extracted = extract_json_path(&value, &json_path)?;
                     let table_val = if json_path.trim().is_empty() {

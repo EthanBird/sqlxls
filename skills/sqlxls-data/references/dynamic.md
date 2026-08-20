@@ -49,12 +49,12 @@ SELECT _source, SUM(amount) FROM sales GROUP BY _source;
 
 ```sql
 LOAD orders FROM '${base}/orders?dt=${d}' WITH (format='json')
-FOR d IN '2024-01-01'..'2024-01-31';          -- 日
-LOAD sales FROM './${ym}.csv' FOR ym IN '2024-01'..'2024-12';  -- 月
+FOR d IN DATE '2024-01-01'..'2024-01-31';          -- 日
+LOAD sales FROM './${ym}.csv' FOR ym IN DATE '2024-01'..'2024-12';  -- 月
 LOAD t FROM '${base}/${d}' WITH (format='json')
 FOR d IN DATE '2024-01-01'..'2024-12-31' STEP MONTH;
 LOAD t FROM '${base}/${d}' WITH (format='json')
-FOR d IN '${start}'..'${end}' STEP 7;
+FOR d IN DATE '${start}'..'${end}' STEP 7;
 ```
 
 查询层转换：`parse_date(x)` / `parse_date(x,'dmy'|'mdy'|'ymd')` / `from_unix` / `to_unix` / `excel_serial`；失败为 NULL。`01/02/2024` 必须写格式。
@@ -79,7 +79,7 @@ LOAD t FROM './logs_*.csv';
 -- _source
 ```
 
-`http(s)` URL 始终走 HTTP 传输，即使写了 `format='json'`。
+`http(s)` URL 始终走 HTTP 传输，即使写了 `format='json'`。远程 CSV/JSON 默认 UTF-8；GBK 用 `encoding='gbk'` 或响应 `charset=gbk`。远程 Excel 看文件头魔数，octet-stream 也能认。
 
 `include_source=false` 可关掉来源列。
 

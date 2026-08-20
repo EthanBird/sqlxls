@@ -471,7 +471,7 @@ fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
         if s[j..].starts_with("..") {
             let (end, after_end, end_is_str) =
                 parse_range_bound(s, skip_ws(s, j + 2)).ok_or_else(|| {
-                    anyhow::anyhow!("范围缺少结束值，例如 1..12 或 '2024-01-01'..'2024-01-31'")
+                    anyhow::anyhow!("范围缺少结束值，例如 1..12 或 DATE '2024-01-01'..'2024-01-31'")
                 })?;
             let (step, after_step) = parse_optional_step(s, after_end)?;
             let start_int = if start_is_str {
@@ -484,13 +484,12 @@ fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
             } else {
                 end.parse::<i64>().ok()
             };
-            let as_date = force_date
-                || start_is_str
-                || end_is_str
-                || matches!(
-                    (start_int, end_int),
-                    (Some(a), Some(b)) if looks_like_compact_date(a) && looks_like_compact_date(b)
+            let as_date = force_date;
+            if (start_is_str || end_is_str) && !force_date {
+                bail!(
+                    "字符串范围语义不明。日期必须写成 DATE '2024-01-01'..'2024-01-31'，月份写成 DATE '2024-01'..'2024-12'"
                 );
+            }
             if as_date {
                 let step = match step {
                     None => ForDateStep::Default,
@@ -507,7 +506,7 @@ fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
                 Some(StepTok::Count(n)) => n,
                 Some(StepTok::Months(_)) => {
                     bail!(
-                        "整数范围不能 STEP MONTH，请写日期区间，例如 '2024-01-01'..'2024-12-31' STEP MONTH"
+                        "整数范围不能 STEP MONTH，请写 DATE '2024-01-01'..'2024-12-31' STEP MONTH"
                     )
                 }
             };
@@ -524,7 +523,7 @@ fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
             bail!("DATE 范围需要 '..'，例如 DATE '2024-01-01'..'2024-01-31'");
         }
     }
-    bail!("FOR ... IN 需要 ('a','b')、1..12、'2024-01-01'..'2024-01-31' 或 GLOB 'pat'");
+    bail!("FOR ... IN 需要 ('a','b')、1..12、DATE '2024-01-01'..'2024-01-31' 或 GLOB 'pat'");
 }
 
 fn parse_range_bound(s: &str, i: usize) -> Option<(String, usize, bool)> {
@@ -578,18 +577,6 @@ fn parse_optional_step(s: &str, i: usize) -> Result<(Option<StepTok>, usize)> {
         bail!("STEP 需要整数、MONTH 或 n MONTH");
     }
     bail!("STEP 需要整数或 MONTH");
-}
-
-fn looks_like_compact_date(n: i64) -> bool {
-    if n < 0 {
-        return false;
-    }
-    let digits = n.to_string().len();
-    match digits {
-        8 => (19000101..=20991231).contains(&n),
-        6 => (190001..=209912).contains(&n),
-        _ => false,
-    }
 }
 
 fn parse_int_at(s: &str, start: usize) -> Option<(i64, usize)> {
@@ -805,8 +792,10 @@ fn format_options(format: &str) -> &'static [&'static str] {
             "skiprows",
             "str",
             "force_str",
+            "encoding",
+            "charset",
         ],
-        "json" => &["json_path", "path", "pointer"],
+        "json" => &["json_path", "path", "pointer", "encoding", "charset"],
         "http" | "https" | "api" => &[
             "method",
             "body",
@@ -824,9 +813,27 @@ fn format_options(format: &str) -> &'static [&'static str] {
             "offset_step",
             "stop",
             "include_source",
+            "encoding",
+            "charset",
+            "sheet",
+            "skip",
+            "skiprows",
+            "delim",
+            "delimiter",
+            "sep",
+            "str",
+            "force_str",
         ],
-        "clipboard" | "clip" => &["delim", "delimiter", "sep", "str", "force_str"],
-        "text" | "txt" => &[],
+        "clipboard" | "clip" => &[
+            "delim",
+            "delimiter",
+            "sep",
+            "str",
+            "force_str",
+            "encoding",
+            "charset",
+        ],
+        "text" | "txt" => &["encoding", "charset"],
         "glob" | "dir" => &[
             "sheet",
             "skip",
@@ -838,6 +845,8 @@ fn format_options(format: &str) -> &'static [&'static str] {
             "delimiter",
             "sep",
             "json_path",
+            "encoding",
+            "charset",
             "path",
             "pointer",
             "include_source",
@@ -1019,9 +1028,9 @@ mod tests {
     #[test]
     fn parse_for_date_range() {
         let stmts = parse_script(
-            "LOAD t FROM 'https://x/${d}' FOR d IN '2024-01-01'..'2024-01-03'; \
+            "LOAD t FROM 'https://x/${d}' FOR d IN DATE '2024-01-01'..'2024-01-03'; \
              LOAD u FROM 'https://x/${m}' FOR m IN DATE '2024-01'..'2024-12' STEP MONTH; \
-             LOAD v FROM 'https://x/${d}' FOR d IN 20240101..20240103 STEP 1",
+             LOAD v FROM 'https://x/${d}' FOR d IN DATE 20240101..20240103 STEP 1",
         )
         .unwrap();
         match &stmts[0] {
@@ -1052,6 +1061,24 @@ mod tests {
                     assert_eq!(*step, ForDateStep::Count(1));
                 }
                 other => panic!("expected compact dates, got {other:?}"),
+            },
+            _ => panic!("load"),
+        }
+    }
+
+    #[test]
+    fn date_range_requires_date_keyword() {
+        let err =
+            parse_script("LOAD t FROM 'x/${d}' FOR d IN '2024-01-01'..'2024-01-03'").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("DATE"), "{msg}");
+        let stmts = parse_script("LOAD t FROM 'x/${n}' FOR n IN 20240101..20240103").unwrap();
+        match &stmts[0] {
+            ScriptStmt::Load(l) => match &l.fors[0].domain {
+                ForDomain::Range { start, end, step } => {
+                    assert_eq!((*start, *end, *step), (20240101, 20240103, 1));
+                }
+                other => panic!("compact without DATE must stay integer, got {other:?}"),
             },
             _ => panic!("load"),
         }

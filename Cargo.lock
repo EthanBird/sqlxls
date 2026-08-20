@@ -1584,6 +1584,7 @@ dependencies = [
  "clipboard-rs",
  "comfy-table",
  "csv",
+ "encoding_rs",
  "fake",
  "glob",
  "reqwest",

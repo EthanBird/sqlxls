@@ -19,7 +19,7 @@
 | HTTP 分页 | `?page=1..n` | 手写 N 个 URL | `page_param` 直到空页 |
 | Excel 多表 | 每个 sheet 结构相同 | 每个 sheet 一个 LOAD | `sheet='*'` |
 | 区域 / 租户 | `/east/orders` vs `/west/orders` | 每个区域一份脚本 | `FOR region IN (...)` |
-| 日期窗口 | `dt=2024-01-01` | 日历展开手写 | `FOR d IN '2024-01-01'..'2024-01-31'` |
+| 日期窗口 | `dt=2024-01-01` | 日历展开手写 | `FOR d IN DATE '2024-01-01'..'2024-01-31'` |
 | 混合相近源 | 两个不同 host、同一 JSON 形 | 两段几乎一样的 LOAD | `EACH ('url1','url2')` |
 
 共同点：**物理源是多个，逻辑表是一个。**  
@@ -101,30 +101,30 @@ GROUP BY _region;
 | `IN ('a', 'b')` | 字面量列表，元素可再含 `${}` |
 | `IN 1..12` | 闭区间整数 |
 | `IN 1..10 STEP 2` | 整数步长 |
-| `IN '2024-01-01'..'2024-01-31'` | 按日闭区间，值为 ISO 字符串 |
-| `IN 20240101..20240131` | 同上，输出保持 `YYYYMMDD` |
-| `IN '2024-01'..'2024-12'` | 按月闭区间（`2024-01` … `2024-12`） |
+| `IN DATE '2024-01-01'..'2024-01-31'` | 按日闭区间，值为 ISO 字符串 |
+| `IN DATE 20240101..20240131` | 同上，输出保持 `YYYYMMDD` |
+| `IN DATE '2024-01'..'2024-12'` | 按月闭区间（`2024-01` … `2024-12`） |
 | `IN DATE '2024-01-01'..'2024-12-31' STEP MONTH` | 按月步进的日期（月末会钳到当月最后一天） |
-| `IN '2024-01-01'..'2024-01-31' STEP 7` | 每 7 天 |
+| `IN DATE '2024-01-01'..'2024-01-31' STEP 7` | 每 7 天 |
 | `IN GLOB './sales_*.csv'` | 匹配到的路径（排序后） |
 
-日期/月份区间上限约 4000 个值。两端可用 `'${start}'..'${end}'`。
+日期/月份区间上限约 4000 个值。两端可用 `DATE '${start}'..'${end}'`。不加 `DATE` 的 `'2024-01-01'..'2024-01-31'` 会报错——避免和普通字符串搞混。
 
 列里的日期字符串、时间戳、Excel 序列在 **查询层** 转，不要手写 N 个 LOAD：
 
 ```sql
 -- 日 API
 LOAD orders FROM '${base}/orders?dt=${d}' WITH (format='json', json_path='data')
-FOR d IN '2024-01-01'..'2024-01-31';
+FOR d IN DATE '2024-01-01'..'2024-01-31';
 
 -- 月报文件 2024-01.csv … 2024-12.csv
-LOAD sales FROM './${ym}.csv' FOR ym IN '2024-01'..'2024-12';
+LOAD sales FROM './${ym}.csv' FOR ym IN DATE '2024-01'..'2024-12';
 
 -- 起始结束来自 SET / --set
 SET start = '2024-01-01';
 SET end   = '2024-03-31';
 LOAD t FROM 'https://api.example.com/day/${d}' WITH (format='json')
-FOR d IN '${start}'..'${end}' STEP 7;
+FOR d IN DATE '${start}'..'${end}' STEP 7;
 ```
 
 查询里转换（失败为 NULL；`01/02/2024` 这种日月歧义必须写格式）：
@@ -236,7 +236,9 @@ WITH (
 );
 ```
 
-`http(s)` 定位符 **始终走 HTTP 连接器**；`format='json'` 只表示按 JSON 解码，分页选项仍然合法。
+`http(s)` 定位符 **始终走 HTTP 连接器**；`format='json'|'csv'|'excel'` 只表示按什么解码。
+
+远程文本默认 UTF-8。GBK/GB18030 必须写 `encoding='gbk'`，或让响应带 `Content-Type: ...; charset=gbk`。Excel 看文件魔数（xlsx 的 `PK`、xls 的 OLE），即使 `Content-Type` 是 `application/octet-stream` 也能认；不要把工作簿当 CSV 去设 encoding。
 
 关闭来源列：`include_source=false`。
 

@@ -118,10 +118,10 @@ SELECT _region, COUNT(*) FROM orders GROUP BY _region;
 
 ```sql
 LOAD orders FROM '${base}/orders?dt=${d}' WITH (format='json', json_path='data')
-FOR d IN '2024-01-01'..'2024-01-31';
+FOR d IN DATE '2024-01-01'..'2024-01-31';
 SELECT _d, COUNT(*) FROM orders GROUP BY _d;
 
-LOAD sales FROM './${ym}.csv' FOR ym IN '2024-01'..'2024-12';
+LOAD sales FROM './${ym}.csv' FOR ym IN DATE '2024-01'..'2024-12';
 ```
 
 列里的日期字符串：

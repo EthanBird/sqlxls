@@ -12,7 +12,7 @@ FOR region IN ('east', 'west');
 
 -- 按日扇出示例（按需改 locator）：
 -- LOAD daily FROM '${base}/orders?dt=${d}' WITH (format='json', json_path='data')
--- FOR d IN '2024-01-01'..'2024-01-31';
+-- FOR d IN DATE '2024-01-01'..'2024-01-31';
 
 SELECT _region, COUNT(*) AS n
 FROM orders
