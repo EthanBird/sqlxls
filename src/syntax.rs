@@ -68,13 +68,13 @@ pub enum EachSpec {
 
 #[derive(Debug, Clone)]
 pub struct ForClause {
-    pub var: String,
+    pub vars: Vec<String>,
     pub domain: ForDomain,
 }
 
 #[derive(Debug, Clone)]
 pub enum ForDomain {
-    List(Vec<Value>),
+    List(Vec<Vec<Value>>),
     Range { start: i64, end: i64, step: i64 },
     Glob(String),
 }
@@ -288,20 +288,133 @@ fn parse_for_clauses(s: &str, mut i: usize) -> Result<(Vec<ForClause>, usize)> {
             break;
         }
         let j = skip_ws(s, after);
-        let (var, after_var) =
-            parse_ident(s, j).ok_or_else(|| anyhow::anyhow!("FOR 缺少变量名"))?;
-        validate_bind_name(&var)?;
-        let j = skip_ws(s, after_var);
+        let (vars, after_vars) = parse_for_vars(s, j)?;
+        if vars.is_empty() {
+            bail!("FOR 缺少变量名");
+        }
+        for v in &vars {
+            validate_bind_name(v)?;
+        }
+        let shown = vars.join(", ");
+        let j = skip_ws(s, after_vars);
         let (in_kw, after_in) =
-            parse_ident(s, j).ok_or_else(|| anyhow::anyhow!("FOR {var} 需要 IN"))?;
+            parse_ident(s, j).ok_or_else(|| anyhow::anyhow!("FOR {shown} 需要 IN"))?;
         if !in_kw.eq_ignore_ascii_case("in") {
-            bail!("FOR {var} 需要 IN，发现 `{in_kw}`");
+            bail!("FOR {shown} 需要 IN，发现 `{in_kw}`");
         }
         let (domain, after_domain) = parse_for_domain(s, skip_ws(s, after_in))?;
-        out.push(ForClause { var, domain });
+        match &domain {
+            ForDomain::Range { .. } | ForDomain::Glob(_) if vars.len() != 1 => {
+                bail!("范围和 GLOB 只能绑定一个变量，请写 FOR {} IN ...", vars[0]);
+            }
+            ForDomain::List(rows) => {
+                for (i, row) in rows.iter().enumerate() {
+                    if row.len() != vars.len() {
+                        bail!(
+                            "FOR ({shown}) 第 {} 行有 {} 个值，需要 {}",
+                            i + 1,
+                            row.len(),
+                            vars.len()
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+        out.push(ForClause { vars, domain });
         i = after_domain;
     }
     Ok((out, skip_ws(s, i)))
+}
+
+fn parse_for_vars(s: &str, i: usize) -> Result<(Vec<String>, usize)> {
+    if i < s.len() && s.as_bytes()[i] == b'(' {
+        let close = matching_paren(s, i)?;
+        let inner = &s[i + 1..close];
+        let vars = parse_ident_csv(inner)?;
+        if vars.is_empty() {
+            bail!("FOR (...) 至少需要一个变量名");
+        }
+        return Ok((vars, close + 1));
+    }
+    let mut vars = Vec::new();
+    let mut p = i;
+    loop {
+        let (name, after) = parse_ident(s, p).ok_or_else(|| anyhow::anyhow!("FOR 缺少变量名"))?;
+        vars.push(name);
+        p = skip_ws(s, after);
+        if p < s.len() && s.as_bytes()[p] == b',' {
+            p = skip_ws(s, p + 1);
+            continue;
+        }
+        return Ok((vars, after));
+    }
+}
+
+fn parse_ident_csv(s: &str) -> Result<Vec<String>> {
+    let mut i = skip_ws(s, 0);
+    let mut vars = Vec::new();
+    if i >= s.len() {
+        return Ok(vars);
+    }
+    loop {
+        let (name, after) =
+            parse_ident(s, i).ok_or_else(|| anyhow::anyhow!("FOR (...) 需要变量名列表"))?;
+        vars.push(name);
+        i = skip_ws(s, after);
+        if i >= s.len() {
+            break;
+        }
+        if s.as_bytes()[i] != b',' {
+            bail!("FOR (...) 变量名之间用逗号分隔");
+        }
+        i = skip_ws(s, i + 1);
+    }
+    Ok(vars)
+}
+
+fn parse_for_list_rows(inner: &str) -> Result<Vec<Vec<Value>>> {
+    let i = skip_ws(inner, 0);
+    if i < inner.len() && inner.as_bytes()[i] == b'(' {
+        let mut rows = Vec::new();
+        let mut p = i;
+        loop {
+            p = skip_ws(inner, p);
+            if p >= inner.len() {
+                break;
+            }
+            if inner.as_bytes()[p] != b'(' {
+                bail!("多变量 FOR 的每一行必须是元组，例如 ('east', 'prod')");
+            }
+            let close = matching_paren(inner, p)?;
+            rows.push(parse_scalar_row(&inner[p + 1..close])?);
+            p = skip_ws(inner, close + 1);
+            if p >= inner.len() {
+                break;
+            }
+            if inner.as_bytes()[p] != b',' {
+                bail!("元组之间用逗号分隔");
+            }
+            p += 1;
+        }
+        return Ok(rows);
+    }
+    Ok(parse_scalar_row(inner)?
+        .into_iter()
+        .map(|v| vec![v])
+        .collect())
+}
+
+fn parse_scalar_row(s: &str) -> Result<Vec<Value>> {
+    let slots = parse_arg_list(s, &|_| false)?;
+    let mut vals = Vec::new();
+    for slot in slots {
+        match slot {
+            ArgSlot::Positional(ArgExpr::Literal(v)) => vals.push(v),
+            _ => bail!("FOR ... IN 只接受字面量"),
+        }
+    }
+    Ok(vals)
 }
 
 fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
@@ -319,18 +432,11 @@ fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
     if i < s.len() && s.as_bytes()[i] == b'(' {
         let close = matching_paren(s, i)?;
         let inner = &s[i + 1..close];
-        let slots = parse_arg_list(inner, &|_| false)?;
-        let mut vals = Vec::new();
-        for slot in slots {
-            match slot {
-                ArgSlot::Positional(ArgExpr::Literal(v)) => vals.push(v),
-                _ => bail!("FOR ... IN (...) 只接受字面量列表"),
-            }
-        }
-        if vals.is_empty() {
+        let rows = parse_for_list_rows(inner)?;
+        if rows.is_empty() {
             bail!("FOR ... IN (...) 至少需要一个值");
         }
-        return Ok((ForDomain::List(vals), close + 1));
+        return Ok((ForDomain::List(rows), close + 1));
     }
     if let Some((start, after_start)) = parse_int_at(s, i) {
         let j = skip_ws(s, after_start);
@@ -757,7 +863,7 @@ mod tests {
         match &stmts[1] {
             ScriptStmt::Load(l) => {
                 assert_eq!(l.fors.len(), 1);
-                assert_eq!(l.fors[0].var, "region");
+                assert_eq!(l.fors[0].vars, vec!["region".to_string()]);
             }
             _ => panic!("load"),
         }
@@ -774,6 +880,29 @@ mod tests {
                 }
                 _ => panic!("range"),
             },
+            _ => panic!("load"),
+        }
+    }
+
+    #[test]
+    fn parse_for_tuple_and_multi() {
+        let stmts = parse_script(
+            "LOAD t FROM '${region}/${env}' FOR (region, env) IN (('east', 'prod'), ('west', 'stg')); \
+             LOAD u FROM '${a}/${b}' FOR a IN ('x') FOR b IN ('y', 'z')",
+        )
+        .unwrap();
+        match &stmts[0] {
+            ScriptStmt::Load(l) => {
+                assert_eq!(l.fors[0].vars, vec!["region", "env"]);
+                match &l.fors[0].domain {
+                    ForDomain::List(rows) => assert_eq!(rows.len(), 2),
+                    _ => panic!("list"),
+                }
+            }
+            _ => panic!("load"),
+        }
+        match &stmts[1] {
+            ScriptStmt::Load(l) => assert_eq!(l.fors.len(), 2),
             _ => panic!("load"),
         }
     }

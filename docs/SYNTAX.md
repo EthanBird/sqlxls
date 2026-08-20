@@ -69,7 +69,10 @@ source          = locator [ "WITH" options ]
 each_spec       = "(" locator { "," locator } ")"
                 | "GLOB" locator ;
 
-for_clause      = "FOR" ident "IN" for_domain ;
+for_clause      = "FOR" for_vars "IN" for_domain ;
+
+for_vars        = ident { "," ident }
+                | "(" ident { "," ident } ")" ;
 
 for_domain      = "(" value { "," value } ")"
                 | integer ".." integer [ "STEP" integer ]

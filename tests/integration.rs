@@ -429,6 +429,61 @@ fn for_list_adds_region_column() {
 }
 
 #[test]
+fn for_cartesian_two_axes() {
+    let dir = temp_dir();
+    fs::write(dir.join("east-2024.csv"), "id,n\n1,1\n").unwrap();
+    fs::write(dir.join("east-2025.csv"), "id,n\n2,2\n").unwrap();
+    fs::write(dir.join("west-2024.csv"), "id,n\n3,4\n").unwrap();
+    fs::write(dir.join("west-2025.csv"), "id,n\n4,8\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD t FROM '{dir}/${{region}}-${{year}}.csv'\n\
+         FOR region IN ('east', 'west')\n\
+         FOR year IN (2024, 2025);\n\
+         SELECT COUNT(*) AS n FROM t",
+        dir = dir.display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 4);
+    let sum: i64 = s
+        .connection()
+        .query_row("SELECT SUM(n) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sum, 15);
+}
+
+#[test]
+fn for_tuple_pairs() {
+    let dir = temp_dir();
+    fs::write(dir.join("east-prod.csv"), "id,n\n1,10\n").unwrap();
+    fs::write(dir.join("west-stg.csv"), "id,n\n2,20\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD t FROM '{dir}/${{region}}-${{env}}.csv'\n\
+         FOR (region, env) IN (('east', 'prod'), ('west', 'stg'));\n\
+         SELECT _region, _env, n FROM t ORDER BY _region",
+        dir = dir.display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 2);
+    let env: String = s
+        .connection()
+        .query_row("SELECT _env FROM t WHERE _region = 'east'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(env, "prod");
+}
+
+#[test]
 fn glob_adds_source_and_merges_json() {
     let dir = temp_dir();
     fs::write(dir.join("a.json"), r#"[{"id":1,"name":"a"}]"#).unwrap();

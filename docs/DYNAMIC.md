@@ -103,6 +103,40 @@ GROUP BY _region;
 | `IN 1..10 STEP 2` | 步长 |
 | `IN GLOB './sales_*.csv'` | 匹配到的路径（排序后） |
 
+**多个变量有两种完全不同的意思，不要混用。**
+
+独立轴、要所有组合（嵌套展开）：
+
+```sql
+LOAD orders FROM '${base}/${region}/${year}/orders'
+WITH (format='json', json_path='data')
+FOR region IN ('east', 'west')
+FOR year  IN (2024, 2025);
+-- 4 个源；列 _region、_year
+```
+
+成对出现、一行一组（zip，不是组合）：
+
+```sql
+LOAD orders FROM '${base}/${region}/${env}/orders'
+WITH (format='json', json_path='data')
+FOR (region, env) IN (
+  ('east', 'prod'),
+  ('west', 'staging')
+);
+-- 只有 2 个源，不会出现 east+staging
+-- 也可写 FOR region, env IN ((...), (...))
+```
+
+固定常量仍用 `SET`，不必放进 FOR：
+
+```sql
+SET base = 'https://api.example.com';
+LOAD orders FROM '${base}/${region}/orders'
+WITH (format='json', json_path='data')
+FOR region IN ('east', 'west');
+```
+
 多个 `FOR` **嵌套**（后者可以用前者的变量），不是预先笛卡尔再求值：
 
 ```sql

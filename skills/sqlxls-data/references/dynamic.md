@@ -17,10 +17,24 @@ sqlxls q.sql --set region=east --strict
 
 ## FOR / EACH
 
+独立轴（所有组合）：
+
 ```sql
-LOAD orders FROM '${base}/${region}/orders' WITH (format='json')
-FOR region IN ('east', 'west');
-SELECT _region, COUNT(*) FROM orders GROUP BY _region;
+LOAD orders FROM '${base}/${region}/${year}/orders' WITH (format='json')
+FOR region IN ('east', 'west')
+FOR year IN (2024, 2025);
+SELECT _region, _year, COUNT(*) FROM orders GROUP BY _region, _year;
+```
+
+成对绑定（zip，不是笛卡尔）：
+
+```sql
+LOAD orders FROM '${base}/${region}/${env}/orders' WITH (format='json')
+FOR (region, env) IN (
+  ('east', 'prod'),
+  ('west', 'staging')
+);
+SELECT _region, _env, COUNT(*) FROM orders GROUP BY _region, _env;
 ```
 
 ```sql
@@ -29,9 +43,7 @@ LOAD sales FROM EACH GLOB './sales_*.xlsx' WITH (format='excel', sheet='Sheet1')
 SELECT _source, SUM(amount) FROM sales GROUP BY _source;
 ```
 
-`FOR x IN 1..12`、`IN 1..10 STEP 2`、`IN GLOB 'pat'`。多个 FOR 嵌套（后者可用前者变量）。
-
-来源列：`FOR region` → `_region`；定位符 → `_source`。
+`FOR x IN 1..12`、`IN 1..10 STEP 2`、`IN GLOB 'pat'`。后面的 FOR 可以用前面的变量。来源列：`FOR region` → `_region`；定位符 → `_source`。
 
 ## 连接器展开
 

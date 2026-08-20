@@ -324,12 +324,22 @@ fn expand_fors(fors: &[ForClause], bind: &BindCtx) -> Result<Vec<Vec<(String, Va
         }
         let values = eval_domain(&clause.domain, &local)?;
         if values.is_empty() {
-            bail!("FOR {} 的取值集合为空", clause.var);
+            bail!("FOR {} 的取值集合为空", clause.vars.join(", "));
         }
         let mut out = Vec::new();
-        for v in values {
+        for row_vals in values {
+            if row_vals.len() != clause.vars.len() {
+                bail!(
+                    "FOR ({}) 需要 {} 个值，实际 {}",
+                    clause.vars.join(", "),
+                    clause.vars.len(),
+                    row_vals.len()
+                );
+            }
             let mut row = prefix.clone();
-            row.push((clause.var.clone(), v));
+            for (var, v) in clause.vars.iter().zip(row_vals) {
+                row.push((var.clone(), v));
+            }
             out.extend(rec(&rest[1..], bind, row)?);
         }
         Ok(out)
@@ -337,16 +347,20 @@ fn expand_fors(fors: &[ForClause], bind: &BindCtx) -> Result<Vec<Vec<(String, Va
     rec(fors, bind, Vec::new())
 }
 
-fn eval_domain(domain: &ForDomain, bind: &BindCtx) -> Result<Vec<Value>> {
+fn eval_domain(domain: &ForDomain, bind: &BindCtx) -> Result<Vec<Vec<Value>>> {
     match domain {
-        ForDomain::List(v) => {
+        ForDomain::List(rows) => {
             let mut out = Vec::new();
-            for item in v {
-                if let Value::Str(s) = item {
-                    out.push(Value::Str(bind.interpolate(s, Missing::Error)?));
-                } else {
-                    out.push(item.clone());
+            for row in rows {
+                let mut interpolated = Vec::with_capacity(row.len());
+                for item in row {
+                    if let Value::Str(s) = item {
+                        interpolated.push(Value::Str(bind.interpolate(s, Missing::Error)?));
+                    } else {
+                        interpolated.push(item.clone());
+                    }
                 }
+                out.push(interpolated);
             }
             Ok(out)
         }
@@ -358,12 +372,12 @@ fn eval_domain(domain: &ForDomain, bind: &BindCtx) -> Result<Vec<Value>> {
             let mut out = Vec::new();
             if *step > 0 {
                 while n <= *end {
-                    out.push(Value::Int(n));
+                    out.push(vec![Value::Int(n)]);
                     n += *step;
                 }
             } else {
                 while n >= *end {
-                    out.push(Value::Int(n));
+                    out.push(vec![Value::Int(n)]);
                     n += *step;
                 }
             }
@@ -371,7 +385,7 @@ fn eval_domain(domain: &ForDomain, bind: &BindCtx) -> Result<Vec<Value>> {
         }
         ForDomain::Glob(pat) => {
             let pat = bind.interpolate(pat, Missing::Error)?;
-            glob_values(&pat)
+            Ok(glob_values(&pat)?.into_iter().map(|v| vec![v]).collect())
         }
     }
 }
@@ -438,6 +452,13 @@ mod tests {
             step: 1,
         };
         let v = eval_domain(&d, &BindCtx::default()).unwrap();
-        assert_eq!(v, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        assert_eq!(
+            v,
+            vec![
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+                vec![Value::Int(3)]
+            ]
+        );
     }
 }
