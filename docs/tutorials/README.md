@@ -13,7 +13,7 @@
 | 3 | [Excel](03-excel.md) | sheet、skip、无表头 `header=false`、自定义 `columns`、全表、远程二进制 xlsx |
 | 4 | [CSV 与编码](04-csv-encoding.md) | 分隔符、GBK/UTF-8、TSV、无表头 |
 | 5 | [JSON](05-json.md) | `json_path`、字段并集、包装对象 |
-| 6 | [HTTP API](06-http-api.md) | GET/POST、鉴权、分页、远程 CSV/Excel |
+| 6 | [HTTP API](06-http-api.md) | GET/POST、鉴权、分页、远程 CSV/Excel、HTTPS 自签 `insecure=true` |
 | 7 | [相似源扇出](07-dynamic-sources.md) | `SET` / `FOR` / `EACH` / glob / 多 sheet |
 | 8 | [日期窗口与转换](08-dates.md) | `DATE '…'..'…'`、`parse_date`、时间戳 |
 | 9 | [清洗、JOIN、窗口](09-sql-cleaning.md) | 去重、类型、质量报告、多表关联 |

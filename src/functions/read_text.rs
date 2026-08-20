@@ -2,7 +2,6 @@ use crate::args::Args;
 use crate::functions::{ExecCtx, FuncOutput, TableFunction};
 use anyhow::{Context, Result};
 use std::fs;
-use std::time::Duration;
 
 pub struct ReadTextExt;
 
@@ -15,14 +14,11 @@ impl TableFunction for ReadTextExt {
         let path = args.require_str(0, &["path", "file", "url"], "文本路径或 URL")?;
         let encoding = args.get_str(99, &["encoding", "charset"]);
         let content = if path.starts_with("http://") || path.starts_with("https://") {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .user_agent("sqlxls/0.2")
-                .build()?;
+            let client = crate::http::client(crate::http::tls_insecure(args))?;
             let resp = client
                 .get(&path)
                 .send()
-                .with_context(|| format!("请求文本失败: {}", path))?
+                .map_err(|e| crate::http::send_failed(e.into(), &path))?
                 .error_for_status()
                 .with_context(|| format!("请求文本失败: {}", path))?;
             let ct = resp

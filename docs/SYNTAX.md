@@ -177,6 +177,8 @@ FROM read_excel('a.xlsx', 'Sheet1', 2, 'str')
 
 Excel / CSV：默认第一行是列名。`header=false` 把第一行当数据（自动名 `col_N`）。`columns='id,name'` 只改列名，不隐含无表头；无表头自定义名要写成 `header=false, columns='…'`。
 
+传输层（任意 `http(s)` 定位符，与 `format=` 正交）：`insecure` / `verify` / `ssl_verify` / `tls_verify`。默认校验证书；`insecure=true` 或 `verify=false` 跳过（`curl -k`）。
+
 ---
 
 ## 4. 为什么不选其他表面

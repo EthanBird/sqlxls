@@ -9,7 +9,6 @@ use anyhow::{bail, Context, Result};
 use std::env;
 use std::fs::File;
 use std::io::Write;
-use std::time::Duration;
 
 pub struct ReadApiExt;
 
@@ -47,6 +46,7 @@ impl TableFunction for ReadApiExt {
             .map(|s| crate::functions::read_csv::parse_delim(&s));
         let force_str = args.get_bool(99, &["str", "force_str"]);
         let header = HeaderSpec::from_args(args)?;
+        let insecure = crate::http::tls_insecure(args);
         let body = HttpBodyOpts {
             format: format.as_deref(),
             encoding: encoding.as_deref(),
@@ -58,10 +58,7 @@ impl TableFunction for ReadApiExt {
             header,
         };
 
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .user_agent("sqlxls/0.2")
-            .build()?;
+        let client = crate::http::client(insecure)?;
 
         let fetch = |url: &str| -> Result<(Vec<u8>, String)> {
             fetch_http(&client, url, &method_str, &payload, &headers_str)
@@ -229,9 +226,10 @@ fn fetch_http(
         }
     }
 
-    let response = req
-        .send()
-        .with_context(|| format!("请求 API 失败: {}", url))?;
+    let response = match req.send() {
+        Ok(r) => r,
+        Err(e) => return Err(crate::http::send_failed(e.into(), url)),
+    };
     let status = response.status();
     let content_type = response
         .headers()

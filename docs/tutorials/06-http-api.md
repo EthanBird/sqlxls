@@ -114,6 +114,21 @@ LOAD t FROM 'https://example.com/download' WITH (
 
 即使 Content-Type 是 `application/octet-stream`、URL 没有 `.xlsx`，只要文件头是 xlsx/xls 魔数就能读。详见 [03-excel.md](03-excel.md)。
 
+## HTTPS 证书（自签 / 公司代理）
+
+默认**校验**服务器证书。自签、过期、或 HTTPS 被公司代理替换证书时会失败，报错里会提示加：
+
+```sql
+LOAD t FROM 'https://intranet.example/export.csv' WITH (
+  format='csv',
+  insecure=true
+);
+```
+
+`verify=false` 同义。相当于 `curl -k`。不要对着不信任的公网地址开。
+
+`read_text('https://...')` 拉 POST body 时同样写 `insecure=true`。
+
 ## 按区域拉同一接口
 
 ```sql

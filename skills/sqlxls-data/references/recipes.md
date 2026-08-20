@@ -161,6 +161,15 @@ LOAD r FROM 'https://api.example.com/query' WITH (
 SELECT * FROM r LIMIT 20;
 ```
 
+内网 HTTPS 自签证书（相当于 `curl -k`，只用于你信任的地址）：
+
+```sql
+LOAD t FROM 'https://intranet.example/export.csv' WITH (
+  format='csv',
+  insecure=true
+);
+```
+
 ## Top N / 窗口
 
 ```sql

@@ -10,6 +10,7 @@
 | 未知 encoding | 常用 `utf-8` `gbk` `gb18030` `gb2312` `big5` |
 | format 不支持选项 `foo` | 该 format 的关闭集合里没有这个名字；不要指望被忽略 |
 | API 返回了 HTML | URL/鉴权不对，登录页被当成数据了 |
+| 证书 / certificate / UnknownIssuer | 默认校验 HTTPS 证书。内网自签或公司代理：`insecure=true`（或 `verify=false`），相当于 `curl -k` |
 | 无法识别的 API 响应 | 显式 `format='json'\|'csv'\|'excel'`；Excel 看魔数，CSV 看编码 |
 | 表函数不能写在 SELECT/WHERE | 先 `LOAD`，查询只引用表名 |
 | `read_text` 不能当表 | 它是标量，嵌在 `body=read_text('a.json')` |
@@ -44,6 +45,20 @@ LOAD t FROM 'raw.xlsx' WITH (format='excel', header=false, columns='id,name,金�
 ```
 
 只写 `columns=` 仍会把第一行当表头丢掉。文件里已有表头、只想改名：`columns='a,b'` 即可。CSV 同样。
+
+## HTTPS 证书不对能不能跑？
+
+能，但必须显式关闭校验。默认会验证书。
+
+```sql
+LOAD t FROM 'https://intranet.example/data.json' WITH (
+  format='json',
+  json_path='data',
+  insecure=true
+);
+```
+
+`verify=false` / `ssl_verify=false` / `tls_verify=false` 效果相同。这和 `curl -k` 一样，中间人可以读到明文流量，只用于你信任的地址。
 
 ## 一次能跑多大？
 
