@@ -165,15 +165,17 @@ FROM read_excel('a.xlsx', 'Sheet1', 2, 'str')
 
 | format | 允许的选项 |
 |--------|------------|
-| `excel` | `sheet`, `skip`, `str` |
-| `csv` | `delim` / `sep`, `skip`, `str`, `encoding` / `charset` |
+| `excel` | `sheet`, `skip`, `str`, `header` / `has_header`, `columns` / `names` / `colnames` |
+| `csv` | `delim` / `sep`, `skip`, `str`, `encoding` / `charset`, `header` / `has_header`, `columns` / `names` / `colnames` |
 | `json` | `json_path` / `path`, `encoding` / `charset` |
-| `http` | `method`, `body` / `payload`, `headers`, `json_path`, `encoding`, 分页选项 |
-| `glob` | 同上，外加按文件扩展名分发 |
-| `clipboard` | `delim`, `str`, `encoding` |
+| `http` | `method`, `body` / `payload`, `headers`, `json_path`, `encoding`, 分页选项；CSV/Excel 体同样允许 `header`、`columns` |
+| `glob` | 同上，外加按文件扩展名分发；Excel/CSV 允许 `header`、`columns` |
+| `clipboard` | `delim`, `str`, `encoding`；Excel/CSV 允许 `header`、`columns` |
 | `text` | `encoding`（标量，只能出现在 `read()` 参数里，不能单独当表） |
 
 未列出的选项：syntax=1 **报错**，不要忽略。忽略等于以后无法再使用这个名字。
+
+Excel / CSV：默认第一行是列名。`header=false` 把第一行当数据（自动名 `col_N`）。`columns='id,name'` 只改列名，不隐含无表头；无表头自定义名要写成 `header=false, columns='…'`。
 
 ---
 

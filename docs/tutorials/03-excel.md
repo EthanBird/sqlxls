@@ -23,6 +23,22 @@ LOAD t FROM 'report.xlsx' WITH (
 );
 ```
 
+默认**第一行是列名**。整张表都是数据、没有表头时：
+
+```sql
+-- 列名自动变成 col_0, col_1, ...
+LOAD t FROM 'raw.xlsx' WITH (format='excel', header=false);
+
+-- 自己起名（必须同时写 header=false，否则第一行数据会被当成表头丢掉）
+LOAD t FROM 'raw.xlsx' WITH (
+  format='excel',
+  header=false,
+  columns='id,name,金额'
+);
+```
+
+文件里有表头、只想换个名字：`columns='a,b,c'`（默认仍会吃掉第一行）。`has_header` 是 `header` 的别名；`names` / `colnames` 是 `columns` 的别名。列不够就补 `col_N`，列太多则数据行右侧填空。
+
 `str=true`：全部当文本，避免工号 `001` 变成整数 `1`：
 
 ```sql
@@ -102,6 +118,7 @@ LEFT JOIN dept d ON TRIM(CAST(u.id AS TEXT)) = TRIM(CAST(d.user_id AS TEXT));
 
 - 就地改公式、合并单元格、写回原 xlsx（工具只**另存** `-o`）
 - 把说明性的前几行当数据：用 `skip`
+- 没有表头却把第一行数据当成列名：用 `header=false`；要自己起名再加 `columns='id,name'`
 - 用位置参数 `read_excel('a.xlsx', 'S', 2, 'str')` 当新脚本（`--strict` 会拒绝）
 
 ## 下一步

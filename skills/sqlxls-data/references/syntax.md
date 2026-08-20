@@ -35,12 +35,12 @@ LOAD ident FROM read('locator', format='csv', delim=',');
 
 | format | 选项 | 说明 |
 |--------|------|------|
-| `excel` | `sheet`, `skip`, `str` | 默认第一个 sheet；`skip` 为跳过的表头前行数；`str=true` 全当文本。远程 xlsx 看 ZIP/`PK` 魔数，不看扩展名 |
-| `csv` | `delim`/`sep`, `skip`, `str`, `encoding`/`charset` | TSV 用 `delim='\t'`。默认 UTF-8；GBK 写 `encoding='gbk'` |
+| `excel` | `sheet`, `skip`, `str`, `header`/`has_header`, `columns`/`names`/`colnames` | 默认第一个 sheet；`skip` 为跳过的表头前行数；`str=true` 全当文本。默认第一行是列名；无表头写 `header=false`（`col_0`…）；自定义名 `columns='id,name'`（无表头时必须同时 `header=false`）。远程 xlsx 看 ZIP/`PK` 魔数，不看扩展名 |
+| `csv` | `delim`/`sep`, `skip`, `str`, `encoding`/`charset`, `header`/`has_header`, `columns`/`names`/`colnames` | TSV 用 `delim='\t'`。默认 UTF-8；GBK 写 `encoding='gbk'`。表头规则与 Excel 相同 |
 | `json` | `json_path`/`path`, `encoding`/`charset` | 点路径，如 `data.items`；也可 `$.data.items` |
-| `http` | `method`, `body`/`payload`, `headers`, `json_path`, `encoding`, `sheet` | `headers` 是 JSON 对象字符串；`${ENV}` 会展开。解码仍由 `format=` 决定 |
-| `glob` | 与被匹配文件的 format 相同，外加按扩展名分发 | 多文件按列名 UNION |
-| `clipboard` | `delim`, `str` | |
+| `http` | `method`, `body`/`payload`, `headers`, `json_path`, `encoding`, `sheet` | `headers` 是 JSON 对象字符串；`${ENV}` 会展开。解码仍由 `format=` 决定。解码 CSV/Excel 时可用 `header`、`columns` |
+| `glob` | 与被匹配文件的 format 相同，外加按扩展名分发 | 多文件按列名 UNION。Excel/CSV 可用 `header`、`columns` |
+| `clipboard` | `delim`, `str` | Excel/CSV 可用 `header`、`columns` |
 | `text` | （无） | 标量，不能当表 |
 
 `read_text('path')` 只能作为另一个 Source 的参数（例如 POST body）。

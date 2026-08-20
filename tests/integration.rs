@@ -39,6 +39,36 @@ fn write_xlsx(path: &std::path::Path, headers: &[&str], rows: &[Vec<&str>]) {
     wb.save(path).unwrap();
 }
 
+fn write_xlsx_data_only(path: &std::path::Path, rows: &[Vec<&str>]) {
+    let mut wb = Workbook::new();
+    let sheet = wb.add_worksheet();
+    for (r, row) in rows.iter().enumerate() {
+        for (c, v) in row.iter().enumerate() {
+            if v.contains('.') {
+                if let Ok(n) = v.parse::<f64>() {
+                    sheet.write_number(r as u32, c as u16, n).unwrap();
+                    continue;
+                }
+            }
+            sheet.write_string(r as u32, c as u16, *v).unwrap();
+        }
+    }
+    wb.save(path).unwrap();
+}
+
+fn table_column_names(s: &Session, table: &str) -> Vec<String> {
+    let mut stmt = s
+        .connection()
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .unwrap();
+    let mut rows = stmt.query([]).unwrap();
+    let mut names = Vec::new();
+    while let Some(row) = rows.next().unwrap() {
+        names.push(row.get::<_, String>(1).unwrap());
+    }
+    names
+}
+
 #[test]
 fn csv_filter_and_types() {
     let dir = temp_dir();
@@ -205,7 +235,7 @@ fn html_bytes_are_not_excel() {
         b"<!DOCTYPE html><html>nope</html>",
         "text/html",
         "https://example.com/data",
-        sqlxls::functions::read_api::HttpBodyOpts::new(),
+        &sqlxls::functions::read_api::HttpBodyOpts::new(),
         false,
         &[],
     )
@@ -743,4 +773,170 @@ fn http_xlsx_binary_octet_stream() {
         .query_row("SELECT name FROM t", [], |r| r.get(0))
         .unwrap();
     assert_eq!(name, "bin");
+}
+
+#[test]
+fn excel_header_false_auto_and_custom_columns() {
+    let dir = temp_dir();
+    let xlsx = dir.join("nohead.xlsx");
+    write_xlsx_data_only(&xlsx, &[vec!["1", "Ada"], vec!["2", "Bob"]]);
+
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!(
+            "LOAD t FROM '{}' WITH (format='excel', header=false); SELECT col_0, col_1 FROM t ORDER BY col_0",
+            xlsx.display()
+        ),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(table_column_names(&s, "t"), vec!["col_0", "col_1"]);
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 2);
+    let first: String = s
+        .connection()
+        .query_row(
+            "SELECT CAST(col_1 AS TEXT) FROM t ORDER BY col_0 LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(first, "Ada");
+
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!(
+            "LOAD t FROM '{}' WITH (format='excel', header=false, columns='id,name');\
+             SELECT id, name FROM t ORDER BY id",
+            xlsx.display()
+        ),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(table_column_names(&s, "t"), vec!["id", "name"]);
+    let name: String = s
+        .connection()
+        .query_row("SELECT name FROM t WHERE id = 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "Ada");
+}
+
+#[test]
+fn excel_columns_renames_existing_header() {
+    let dir = temp_dir();
+    let xlsx = dir.join("head.xlsx");
+    write_xlsx(&xlsx, &["id", "name"], &[vec!["1", "Ada"]]);
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!(
+            "LOAD t FROM '{}' WITH (format='excel', columns='uid,uname'); SELECT uid, uname FROM t",
+            xlsx.display()
+        ),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(table_column_names(&s, "t"), vec!["uid", "uname"]);
+    let name: String = s
+        .connection()
+        .query_row("SELECT uname FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "Ada");
+}
+
+#[test]
+fn csv_header_false_and_custom_columns() {
+    let dir = temp_dir();
+    let csv = dir.join("nohead.csv");
+    fs::write(&csv, "1,Ada\n2,Bob\n").unwrap();
+
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!(
+            "LOAD t FROM '{}' WITH (format='csv', header=false); SELECT col_0, col_1 FROM t",
+            csv.display()
+        ),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(table_column_names(&s, "t"), vec!["col_0", "col_1"]);
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 2);
+
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!(
+            "LOAD t FROM '{}' WITH (format='csv', header=false, columns='id,name');\
+             SELECT name FROM t WHERE id = 2",
+            csv.display()
+        ),
+        None,
+        false,
+    )
+    .unwrap();
+    let name: String = s
+        .connection()
+        .query_row("SELECT name FROM t WHERE id = 2", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "Bob");
+}
+
+#[test]
+fn columns_without_header_false_still_consumes_first_row() {
+    let dir = temp_dir();
+    let csv = dir.join("nohead.csv");
+    fs::write(&csv, "1,Ada\n2,Bob\n").unwrap();
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!(
+            "LOAD t FROM '{}' WITH (format='csv', columns='id,name'); SELECT * FROM t",
+            csv.display()
+        ),
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(table_column_names(&s, "t"), vec!["id", "name"]);
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+    let name: String = s
+        .connection()
+        .query_row("SELECT name FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "Bob");
+}
+
+#[test]
+fn json_rejects_header_option() {
+    let dir = temp_dir();
+    let json = dir.join("a.json");
+    fs::write(&json, r#"[{"id":1}]"#).unwrap();
+    let mut s = Session::new().unwrap();
+    let err = s
+        .run_sql(
+            &format!(
+                "LOAD t FROM '{}' WITH (format='json', header=false)",
+                json.display()
+            ),
+            None,
+            false,
+        )
+        .unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("不支持选项") || msg.contains("header"),
+        "{msg}"
+    );
 }

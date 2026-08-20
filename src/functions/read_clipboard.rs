@@ -3,6 +3,7 @@ use crate::functions::read_csv::{load_csv_text, parse_delim, sniff_delim};
 use crate::functions::read_excel::excel_to_frame;
 use crate::functions::{ExecCtx, FuncOutput, TableFunction};
 use crate::ingest::{ingest_rows, IngestOpts};
+use crate::schema::HeaderSpec;
 use anyhow::{bail, Result};
 use clipboard_rs::{Clipboard, ClipboardContext};
 use std::path::Path;
@@ -20,6 +21,7 @@ impl TableFunction for ReadClipboardExt {
         let delim = args
             .get_str(1, &["delim", "delimiter", "sep"])
             .map(|s| parse_delim(&s));
+        let header = HeaderSpec::from_args(args)?;
 
         let ctx_clip =
             ClipboardContext::new().map_err(|e| anyhow::anyhow!("无法初始化剪贴板: {}", e))?;
@@ -35,7 +37,7 @@ impl TableFunction for ReadClipboardExt {
                     .to_lowercase();
                 if ext == "xlsx" || ext == "xls" || ext == "xlsm" {
                     println!("📁 剪贴板捕获到 Excel 文件: {}", file_path);
-                    let (headers, rows) = excel_to_frame(file_path, None, 0, force_str)?;
+                    let (headers, rows) = excel_to_frame(file_path, None, 0, force_str, &header)?;
                     ingest_rows(
                         ctx.conn,
                         &ctx.dest_table,
@@ -73,6 +75,7 @@ impl TableFunction for ReadClipboardExt {
             0,
             force_str,
             false,
+            &header,
         )?;
         println!("📋 已将剪贴板内容成功加载为临时表。");
         Ok(FuncOutput::Table)

@@ -26,6 +26,19 @@ LOAD t FROM 'sales.txt' WITH (format='csv', delim='\t');
 LOAD t FROM 'sales.csv' WITH (format='csv', skip=1);
 ```
 
+没有表头、第一行就是数据：
+
+```sql
+LOAD t FROM 'raw.csv' WITH (format='csv', header=false);
+LOAD t FROM 'raw.csv' WITH (
+  format='csv',
+  header=false,
+  columns='id,name,金额'
+);
+```
+
+只写 `columns=` **不会**变成无表头：第一行仍会被当成表头读掉。无表头必须加 `header=false`。文件有表头只想改名：`columns='a,b'` 即可。
+
 工号/电话不要被当成数字：
 
 ```sql

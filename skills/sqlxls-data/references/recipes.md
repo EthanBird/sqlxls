@@ -9,6 +9,12 @@ LOAD t FROM 'data.xlsx' WITH (format='excel', sheet='Sheet1');
 SELECT * FROM t LIMIT 8;
 ```
 
+没有表头、第一行就是数据：
+
+```sql
+LOAD t FROM 'raw.xlsx' WITH (format='excel', header=false, columns='id,name,金额');
+```
+
 ```sql
 LOAD t FROM 'data.xlsx' WITH (format='excel');
 SELECT COUNT(*) AS n FROM t;

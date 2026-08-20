@@ -10,8 +10,8 @@
 |---|------|----------------|
 | 1 | [安装与命令行](01-installation.md) | 下载、编译、`sqlxls --help`、`--strict`、导出 |
 | 2 | [第一份脚本](02-first-query.md) | `LOAD` + `SELECT` 两层语言；探 schema |
-| 3 | [Excel](03-excel.md) | sheet、skip、全表、远程二进制 xlsx |
-| 4 | [CSV 与编码](04-csv-encoding.md) | 分隔符、GBK/UTF-8、TSV |
+| 3 | [Excel](03-excel.md) | sheet、skip、无表头 `header=false`、自定义 `columns`、全表、远程二进制 xlsx |
+| 4 | [CSV 与编码](04-csv-encoding.md) | 分隔符、GBK/UTF-8、TSV、无表头 |
 | 5 | [JSON](05-json.md) | `json_path`、字段并集、包装对象 |
 | 6 | [HTTP API](06-http-api.md) | GET/POST、鉴权、分页、远程 CSV/Excel |
 | 7 | [相似源扇出](07-dynamic-sources.md) | `SET` / `FOR` / `EACH` / glob / 多 sheet |

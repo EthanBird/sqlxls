@@ -14,7 +14,7 @@
 | 表函数不能写在 SELECT/WHERE | 先 `LOAD`，查询只引用表名 |
 | `read_text` 不能当表 | 它是标量，嵌在 `body=read_text('a.json')` |
 | 展开后没有任何数据源 | `FOR`/`EACH`/glob 结果为空，或日期区间起始晚于结束 |
-| `no such column` | 中文列加 `"双引号"`；先 `PRAGMA table_info` |
+| `no such column` | 中文列加 `"双引号"`；先 `PRAGMA table_info`。没有表头时默认仍会把第一行当列名，应写 `header=false`；自定义名用 `columns='…'` |
 | LOAD 表名非法 | 表名只能 `[A-Za-z_][A-Za-z0-9_]*` |
 
 `--explain` 看展开了几个 URL/文件。
@@ -34,6 +34,16 @@ UTF-8 是默认。HTTP `charset=` 会用。**不会**在 UTF-8 失败时偷偷�
 ## 远程 Excel 一定要 .xlsx 后缀吗？
 
 不必。看文件头：xlsx=`PK`，xls=OLE。`octet-stream` 也可以。HTML 不行。
+
+## Excel / CSV 没有表头怎么办？
+
+默认第一行是列名。整张都是数据时写 `header=false`，列名是 `col_0`, `col_1`, …。要自己起名：
+
+```sql
+LOAD t FROM 'raw.xlsx' WITH (format='excel', header=false, columns='id,name,金额');
+```
+
+只写 `columns=` 仍会把第一行当表头丢掉。文件里已有表头、只想改名：`columns='a,b'` 即可。CSV 同样。
 
 ## 一次能跑多大？
 

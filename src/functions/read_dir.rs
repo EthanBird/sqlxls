@@ -6,6 +6,7 @@ use crate::functions::{ExecCtx, FuncOutput, TableFunction};
 use crate::ingest::{
     attach_const_column, include_source, ingest_rows, union_from_table, Cell, IngestOpts,
 };
+use crate::schema::HeaderSpec;
 use anyhow::{bail, Context, Result};
 use glob::glob;
 use std::path::Path;
@@ -49,6 +50,7 @@ impl TableFunction for ReadDirExt {
             .unwrap_or_default();
         let encoding = args.get_str(99, &["encoding", "charset"]);
         let add_source = include_source(args);
+        let header = HeaderSpec::from_args(args)?;
 
         let mut first = true;
         for path in &files {
@@ -66,7 +68,7 @@ impl TableFunction for ReadDirExt {
             match ext.as_str() {
                 "xlsx" | "xls" | "xlsm" => {
                     let (mut headers, mut rows) =
-                        excel_to_frame(&file_path, sheet.as_deref(), skip, force_str)?;
+                        excel_to_frame(&file_path, sheet.as_deref(), skip, force_str, &header)?;
                     for (k, v) in &extras {
                         attach_const_column(&mut headers, &mut rows, k, Cell::Text(v.clone()));
                     }
@@ -93,6 +95,7 @@ impl TableFunction for ReadDirExt {
                             force_str,
                             !first,
                             encoding.as_deref(),
+                            &header,
                         )?;
                     } else {
                         let tmp = format!("{}__glob", ctx.dest_table);
@@ -105,6 +108,7 @@ impl TableFunction for ReadDirExt {
                             force_str,
                             false,
                             encoding.as_deref(),
+                            &header,
                         )?;
                         union_from_table(ctx.conn, &ctx.dest_table, &tmp, &extras, !first)?;
                         ctx.conn
