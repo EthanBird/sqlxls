@@ -38,7 +38,7 @@ LOAD ident FROM read('locator', format='csv', delim=',');
 | `excel` | `sheet`, `skip`, `str` | 默认第一个 sheet；`skip` 为跳过的表头前行数；`str=true` 全当文本。远程 xlsx 看 ZIP/`PK` 魔数，不看扩展名 |
 | `csv` | `delim`/`sep`, `skip`, `str`, `encoding`/`charset` | TSV 用 `delim='\t'`。默认 UTF-8；GBK 写 `encoding='gbk'` |
 | `json` | `json_path`/`path`, `encoding`/`charset` | 点路径，如 `data.items`；也可 `$.data.items` |
-| `http` | `method`, `body`/`payload`, `headers`, `json_path`, `encoding`, `sheet` | `headers` 是 JSON 对象字符串；`${ENV}` 会展开。解码仍由 `format=` 决定 |
+| `http` | `method`, `body`/`payload`, `headers`, `json_path`, `encoding`, `sheet` | `headers` 是 JSON 对象字符串；`${ENV}` 会展开。解码仍由 `format=` 决定。HTTPS 自签证书：`insecure=true` 或 `verify=false`（任意 https 定位符都可用，不必 format='http'） |
 | `glob` | 与被匹配文件的 format 相同，外加按扩展名分发 | 多文件按列名 UNION |
 | `clipboard` | `delim`, `str` | |
 | `text` | （无） | 标量，不能当表 |

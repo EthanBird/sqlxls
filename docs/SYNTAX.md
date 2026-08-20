@@ -175,6 +175,8 @@ FROM read_excel('a.xlsx', 'Sheet1', 2, 'str')
 
 未列出的选项：syntax=1 **报错**，不要忽略。忽略等于以后无法再使用这个名字。
 
+传输层（任意 `http(s)` 定位符，与 `format=` 正交）：`insecure` / `verify` / `ssl_verify` / `tls_verify`。默认校验证书；`insecure=true` 或 `verify=false` 跳过（`curl -k`）。
+
 ---
 
 ## 4. 为什么不选其他表面

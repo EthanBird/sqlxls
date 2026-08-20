@@ -5,6 +5,7 @@ pub mod dates;
 pub mod encoding;
 pub mod engine;
 pub mod functions;
+pub mod http;
 pub mod ingest;
 pub mod rewrite;
 pub mod schema;

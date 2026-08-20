@@ -771,6 +771,11 @@ const COMMON_OPTS: &[&str] = &[
     "offset_step",
     "stop",
     "include_source",
+    // HTTPS 传输：跳过证书校验（curl -k）
+    "insecure",
+    "verify",
+    "ssl_verify",
+    "tls_verify",
 ];
 
 fn format_options(format: &str) -> &'static [&'static str] {

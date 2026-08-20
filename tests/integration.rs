@@ -744,3 +744,34 @@ fn http_xlsx_binary_octet_stream() {
         .unwrap();
     assert_eq!(name, "bin");
 }
+
+#[test]
+fn http_insecure_option_is_accepted() {
+    let url = serve_http_bytes(b"id,name\n1,ok\n".to_vec(), "text/csv");
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!("LOAD t FROM '{url}' WITH (format='csv', insecure=true); SELECT name FROM t"),
+        None,
+        false,
+    )
+    .unwrap();
+    let name: String = s
+        .connection()
+        .query_row("SELECT name FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "ok");
+
+    let url = serve_http_bytes(br#"[{"n":1}]"#.to_vec(), "application/json");
+    let mut s = Session::new().unwrap();
+    s.run_sql(
+        &format!("LOAD t FROM '{url}' WITH (format='json', verify=false); SELECT n FROM t"),
+        None,
+        false,
+    )
+    .unwrap();
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT n FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+}

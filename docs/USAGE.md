@@ -114,7 +114,8 @@ ORDER BY total DESC;
 | `text` | `encoding`（**标量**，不能 `FROM read_text(...)`） |
 
 分页（HTTP）：`page_param`, `page_from`, `page_to`, `page_size`, `page_size_param`, `offset_param`, `offset_step`, `stop`。  
-通用：`include_source`（默认带来源列；`false` 关掉）。
+通用：`include_source`（默认带来源列；`false` 关掉）。  
+HTTPS 证书：默认校验。内网自签 / 公司代理导致失败时，加 `insecure=true`（或 `verify=false`），相当于 `curl -k`。只用于你信任的地址。
 
 ---
 

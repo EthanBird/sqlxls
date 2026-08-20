@@ -106,6 +106,7 @@ ORDER BY total DESC;
 - 远程/本地 CSV 默认 UTF-8。GBK 写 `encoding='gbk'`，或 HTTP `charset=gbk`。远程 Excel 按二进制魔数识别，即使 Content-Type 是 octet-stream。
 - 目录同质表：`LOAD t FROM EACH GLOB './sales_*.csv'` 或 `LOAD t FROM './sales_*.csv'`，用 `_source` 分组。
 - HTTP 分页：`page_param='page'`，空页停止；不要手写 page=1..n 的 N 条 SQL。
+- HTTPS 默认校验证书。内网自签 / 公司代理：`insecure=true` 或 `verify=false`（相当于 `curl -k`）。不要对不信任的地址开。
 - 工作簿多个同构 sheet：`sheet='*'`，用 `_sheet` 分组。
 - Token 走环境变量：`SQLXLS_BEARER_TOKEN` 或 `'{"Authorization":"Bearer ${TOKEN}"}'`。不要把密钥写进提交的 `.sql`。
 - 字符串用单引号，标识符用双引号。拼接用 `||`。大小写不敏感匹配用 `LOWER(x) = LOWER(y)` 或 `COLLATE NOCASE`，没有 `ILIKE`。
