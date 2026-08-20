@@ -135,6 +135,8 @@ sqlxls -f "read('data.csv')"
 | [references/sql-dialect.md](references/sql-dialect.md) | SQLite 方言、引号、类型、窗口函数 |
 | [references/recipes.md](references/recipes.md) | 清洗、JOIN、质量报告、HTTP、目录合并 |
 | [references/install.md](references/install.md) | 找不到二进制、HTTP 鉴权 |
+| [docs/USAGE.md](../../../docs/USAGE.md) | 完整使用手册 |
+| [docs/tutorials/](../../../docs/tutorials/README.md) | 分场景教程 |
 | [assets/templates/](assets/templates/) | 复制改路径即可跑的脚本 |
 
 可执行脚本：

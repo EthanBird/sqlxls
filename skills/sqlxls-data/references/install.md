@@ -7,7 +7,7 @@
 1. 环境变量 `SQLXLS` 指向可执行文件
 2. `PATH` 里的 `sqlxls`
 3. 当前 git 仓库的 `target/release/sqlxls`（从本技能包或 cwd 向上找）
-4. 从 GitHub Releases `v0.2.0` 下载到 `${XDG_CACHE_HOME:-$HOME/.cache}/sqlxls/bin/sqlxls`
+4. 从 GitHub Releases 最新版下载到 `${XDG_CACHE_HOME:-$HOME/.cache}/sqlxls/bin/sqlxls`
 
 手动下载：https://github.com/EthanBird/sqlxls/releases
 
@@ -56,6 +56,6 @@ headers='{"Authorization":"Bearer ${TOKEN}","X-Request-Id":"agent-1"}'
 
 - 无 `read_sql`（不能直连 Postgres/MySQL）
 - 无 S3 / Parquet / 结果缓存 / `sqlxls.toml` catalog
-- 无 HTTP 分页、无 REPL、无 `--schema` 独立旗标（用 `PRAGMA table_info`）
+- 无 HTTP cursor / Link 分页（`page_param` / `offset_param` 可以）；无 REPL、无独立 `--schema` 旗标（用 `PRAGMA table_info`）
 - 全量进内存；超大 xlsx 先让用户切分或导出 CSV
 - 不写回原工作簿

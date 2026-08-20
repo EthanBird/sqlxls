@@ -166,12 +166,12 @@ FROM read_excel('a.xlsx', 'Sheet1', 2, 'str')
 | format | 允许的选项 |
 |--------|------------|
 | `excel` | `sheet`, `skip`, `str` |
-| `csv` | `delim` / `sep`, `skip`, `str` |
-| `json` | `json_path` / `path` |
-| `http` | `method`, `body` / `payload`, `headers`, `json_path` |
+| `csv` | `delim` / `sep`, `skip`, `str`, `encoding` / `charset` |
+| `json` | `json_path` / `path`, `encoding` / `charset` |
+| `http` | `method`, `body` / `payload`, `headers`, `json_path`, `encoding`, 分页选项 |
 | `glob` | 同上，外加按文件扩展名分发 |
-| `clipboard` | `delim`, `str` |
-| `text` | （无；标量，只能出现在 `read()` 参数里，不能单独当表） |
+| `clipboard` | `delim`, `str`, `encoding` |
+| `text` | `encoding`（标量，只能出现在 `read()` 参数里，不能单独当表） |
 
 未列出的选项：syntax=1 **报错**，不要忽略。忽略等于以后无法再使用这个名字。
 

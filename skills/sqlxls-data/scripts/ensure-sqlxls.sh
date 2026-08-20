@@ -2,7 +2,7 @@
 # 在 stdout 打印可用的 sqlxls 可执行文件路径。日志走 stderr。
 set -euo pipefail
 
-RELEASE_TAG="${SQLXLS_RELEASE_TAG:-v0.2.0}"
+RELEASE_TAG="${SQLXLS_RELEASE_TAG:-v0.3.0}"
 REPO="${SQLXLS_REPO:-EthanBird/sqlxls}"
 CACHE_DIR="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/sqlxls/bin"
 
