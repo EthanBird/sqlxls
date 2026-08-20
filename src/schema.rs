@@ -124,7 +124,7 @@ fn parse_column_list(raw: &str) -> Result<Vec<String>> {
 }
 
 fn pad_column_names(names: &[String], width: usize) -> Vec<String> {
-    let mut out: Vec<String> = names.iter().cloned().take(width).collect();
+    let mut out: Vec<String> = names.iter().take(width).cloned().collect();
     while out.len() < width {
         out.push(String::new());
     }
@@ -206,8 +206,10 @@ mod tests {
     fn table_width_keeps_header_len_by_default() {
         let spec = HeaderSpec::default();
         assert_eq!(table_width(&spec, Some(2), 9), 2);
-        let mut no_header = HeaderSpec::default();
-        no_header.has_header = false;
+        let no_header = HeaderSpec {
+            has_header: false,
+            ..Default::default()
+        };
         assert_eq!(table_width(&no_header, None, 3), 3);
     }
 }

@@ -1,4 +1,4 @@
-# sqlxls Source 语法（v0.3 / syntax=1）
+# sqlxls Source 语法（v0.3.1 / syntax=1）
 
 查询必须是标准 SQL。数据源只用这一套封闭语言。
 

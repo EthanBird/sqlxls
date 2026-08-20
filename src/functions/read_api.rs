@@ -315,6 +315,12 @@ pub struct HttpBodyOpts<'a> {
     pub header: HeaderSpec,
 }
 
+impl<'a> Default for HttpBodyOpts<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> HttpBodyOpts<'a> {
     pub fn new() -> Self {
         Self {

@@ -12,7 +12,7 @@ license: MIT
 compatibility: Requires sqlxls CLI v0.3+ (https://github.com/EthanBird/sqlxls/releases). Query engine is in-memory SQLite. Network needed only for HTTP sources or first-time binary install.
 metadata:
   author: EthanBird
-  version: "0.3.0"
+  version: "0.3.1"
   tool: sqlxls
   homepage: https://github.com/EthanBird/sqlxls
 ---
