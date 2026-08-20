@@ -114,6 +114,24 @@ FOR region IN ('east', 'west');
 SELECT _region, COUNT(*) FROM orders GROUP BY _region;
 ```
 
+按日/月扇出（不要手写日历）：
+
+```sql
+LOAD orders FROM '${base}/orders?dt=${d}' WITH (format='json', json_path='data')
+FOR d IN '2024-01-01'..'2024-01-31';
+SELECT _d, COUNT(*) FROM orders GROUP BY _d;
+
+LOAD sales FROM './${ym}.csv' FOR ym IN '2024-01'..'2024-12';
+```
+
+列里的日期字符串：
+
+```sql
+SELECT parse_date("日期", 'dmy') AS d, from_unix(ts) AS dt
+FROM t
+WHERE parse_date("日期", 'dmy') >= '2024-01-01';
+```
+
 ```sql
 LOAD orders FROM 'https://api.example.com/orders' WITH (
   format='json',

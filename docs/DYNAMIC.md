@@ -19,7 +19,7 @@
 | HTTP 分页 | `?page=1..n` | 手写 N 个 URL | `page_param` 直到空页 |
 | Excel 多表 | 每个 sheet 结构相同 | 每个 sheet 一个 LOAD | `sheet='*'` |
 | 区域 / 租户 | `/east/orders` vs `/west/orders` | 每个区域一份脚本 | `FOR region IN (...)` |
-| 日期窗口 | `dt=2024-01-01` | 日历展开手写 | `FOR day IN (...)` 或范围 |
+| 日期窗口 | `dt=2024-01-01` | 日历展开手写 | `FOR d IN '2024-01-01'..'2024-01-31'` |
 | 混合相近源 | 两个不同 host、同一 JSON 形 | 两段几乎一样的 LOAD | `EACH ('url1','url2')` |
 
 共同点：**物理源是多个，逻辑表是一个。**  
@@ -100,8 +100,48 @@ GROUP BY _region;
 |------|------|
 | `IN ('a', 'b')` | 字面量列表，元素可再含 `${}` |
 | `IN 1..12` | 闭区间整数 |
-| `IN 1..10 STEP 2` | 步长 |
+| `IN 1..10 STEP 2` | 整数步长 |
+| `IN '2024-01-01'..'2024-01-31'` | 按日闭区间，值为 ISO 字符串 |
+| `IN 20240101..20240131` | 同上，输出保持 `YYYYMMDD` |
+| `IN '2024-01'..'2024-12'` | 按月闭区间（`2024-01` … `2024-12`） |
+| `IN DATE '2024-01-01'..'2024-12-31' STEP MONTH` | 按月步进的日期（月末会钳到当月最后一天） |
+| `IN '2024-01-01'..'2024-01-31' STEP 7` | 每 7 天 |
 | `IN GLOB './sales_*.csv'` | 匹配到的路径（排序后） |
+
+日期/月份区间上限约 4000 个值。两端可用 `'${start}'..'${end}'`。
+
+列里的日期字符串、时间戳、Excel 序列在 **查询层** 转，不要手写 N 个 LOAD：
+
+```sql
+-- 日 API
+LOAD orders FROM '${base}/orders?dt=${d}' WITH (format='json', json_path='data')
+FOR d IN '2024-01-01'..'2024-01-31';
+
+-- 月报文件 2024-01.csv … 2024-12.csv
+LOAD sales FROM './${ym}.csv' FOR ym IN '2024-01'..'2024-12';
+
+-- 起始结束来自 SET / --set
+SET start = '2024-01-01';
+SET end   = '2024-03-31';
+LOAD t FROM 'https://api.example.com/day/${d}' WITH (format='json')
+FOR d IN '${start}'..'${end}' STEP 7;
+```
+
+查询里转换（失败为 NULL；`01/02/2024` 这种日月歧义必须写格式）：
+
+```sql
+SELECT
+  parse_date(col) AS d,                    -- ISO、YYYYMMDD；15/01/2024 因日>12 可自动
+  parse_date(col, 'dmy') AS d_dmy,         -- 日/月/年
+  parse_date(col, 'mdy') AS d_mdy,         -- 月/日/年
+  parse_date(col, '%Y年%m月%d日') AS d_fmt,
+  parse_datetime(ts) AS dt,                -- RFC3339、空格分隔、日期当 00:00:00
+  from_unix(ts) AS dt_unix,                -- 秒；绝对值 ≥ 1e12 当毫秒
+  to_unix(ts) AS epoch,
+  excel_serial(n) AS d_excel,              -- 与导入 Excel 相同：1899-12-30 为 0
+  date(col), strftime('%Y-%m', col), unixepoch(col)  -- SQLite 自带
+FROM t;
+```
 
 **多个变量有两种完全不同的意思，不要混用。**
 
@@ -261,7 +301,8 @@ GROUP BY _region, status;
 | 能力 | 状态 |
 |------|------|
 | `SET` / `--set` / `${var}` | 已实现 |
-| `FOR … IN` 列表 / 范围 / GLOB | 已实现 |
+| `FOR … IN` 列表 / 整数范围 / 日期范围 / GLOB | 已实现 |
+| `parse_date` / `from_unix` / `excel_serial` | 已实现 |
 | `LOAD … FROM EACH` / `EACH GLOB` | 已实现 |
 | 展开结果 UNION BY NAME + 来源列 | 已实现 |
 | glob `_source`；JSON 多文件按列名合并 | 已实现 |

@@ -72,10 +72,29 @@ pub struct ForClause {
     pub domain: ForDomain,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ForDateStep {
+    /// 日区间按 1 天，月区间按 1 月。
+    Default,
+    /// `STEP n`：日区间为 n 天，月区间为 n 月。
+    Count(i64),
+    /// `STEP MONTH` 或 `STEP n MONTH`。
+    Months(i64),
+}
+
 #[derive(Debug, Clone)]
 pub enum ForDomain {
     List(Vec<Vec<Value>>),
-    Range { start: i64, end: i64, step: i64 },
+    Range {
+        start: i64,
+        end: i64,
+        step: i64,
+    },
+    Dates {
+        start: String,
+        end: String,
+        step: ForDateStep,
+    },
     Glob(String),
 }
 
@@ -304,7 +323,9 @@ fn parse_for_clauses(s: &str, mut i: usize) -> Result<(Vec<ForClause>, usize)> {
         }
         let (domain, after_domain) = parse_for_domain(s, skip_ws(s, after_in))?;
         match &domain {
-            ForDomain::Range { .. } | ForDomain::Glob(_) if vars.len() != 1 => {
+            ForDomain::Range { .. } | ForDomain::Dates { .. } | ForDomain::Glob(_)
+                if vars.len() != 1 =>
+            {
                 bail!("范围和 GLOB 只能绑定一个变量，请写 FOR {} IN ...", vars[0]);
             }
             ForDomain::List(rows) => {
@@ -418,6 +439,8 @@ fn parse_scalar_row(s: &str) -> Result<Vec<Value>> {
 }
 
 fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
+    let mut i = skip_ws(s, i);
+    let mut force_date = false;
     if let Some((kw, after)) = parse_ident(s, i) {
         if kw.eq_ignore_ascii_case("glob") {
             let j = skip_ws(s, after);
@@ -427,9 +450,14 @@ fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
             let (pat, end) = parse_string_literal(s, j)?;
             return Ok((ForDomain::Glob(pat), end));
         }
-        bail!("FOR ... IN 后面不能是标识符 `{kw}`，请用列表、范围或 GLOB");
+        if kw.eq_ignore_ascii_case("date") {
+            force_date = true;
+            i = skip_ws(s, after);
+        } else {
+            bail!("FOR ... IN 后面不能是标识符 `{kw}`，请用列表、范围或 GLOB");
+        }
     }
-    if i < s.len() && s.as_bytes()[i] == b'(' {
+    if !force_date && i < s.len() && s.as_bytes()[i] == b'(' {
         let close = matching_paren(s, i)?;
         let inner = &s[i + 1..close];
         let rows = parse_for_list_rows(inner)?;
@@ -438,26 +466,130 @@ fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
         }
         return Ok((ForDomain::List(rows), close + 1));
     }
-    if let Some((start, after_start)) = parse_int_at(s, i) {
+    if let Some((start, after_start, start_is_str)) = parse_range_bound(s, i) {
         let j = skip_ws(s, after_start);
         if s[j..].starts_with("..") {
-            let (end, after_end) = parse_int_at(s, skip_ws(s, j + 2))
-                .ok_or_else(|| anyhow::anyhow!("范围缺少结束值，例如 1..12"))?;
-            let k = skip_ws(s, after_end);
-            let (step, after_step) = if let Some((kw, after_kw)) = parse_ident(s, k) {
-                if kw.eq_ignore_ascii_case("step") {
-                    parse_int_at(s, skip_ws(s, after_kw))
-                        .ok_or_else(|| anyhow::anyhow!("STEP 需要整数"))?
-                } else {
-                    (1, k)
-                }
+            let (end, after_end, end_is_str) =
+                parse_range_bound(s, skip_ws(s, j + 2)).ok_or_else(|| {
+                    anyhow::anyhow!("范围缺少结束值，例如 1..12 或 '2024-01-01'..'2024-01-31'")
+                })?;
+            let (step, after_step) = parse_optional_step(s, after_end)?;
+            let start_int = if start_is_str {
+                None
             } else {
-                (1, k)
+                start.parse::<i64>().ok()
             };
-            return Ok((ForDomain::Range { start, end, step }, after_step));
+            let end_int = if end_is_str {
+                None
+            } else {
+                end.parse::<i64>().ok()
+            };
+            let as_date = force_date
+                || start_is_str
+                || end_is_str
+                || matches!(
+                    (start_int, end_int),
+                    (Some(a), Some(b)) if looks_like_compact_date(a) && looks_like_compact_date(b)
+                );
+            if as_date {
+                let step = match step {
+                    None => ForDateStep::Default,
+                    Some(StepTok::Count(n)) => ForDateStep::Count(n),
+                    Some(StepTok::Months(n)) => ForDateStep::Months(n),
+                };
+                return Ok((ForDomain::Dates { start, end, step }, after_step));
+            }
+            let (Some(a), Some(b)) = (start_int, end_int) else {
+                bail!("整数范围的两端都必须是整数");
+            };
+            let step = match step {
+                None => 1,
+                Some(StepTok::Count(n)) => n,
+                Some(StepTok::Months(_)) => {
+                    bail!(
+                        "整数范围不能 STEP MONTH，请写日期区间，例如 '2024-01-01'..'2024-12-31' STEP MONTH"
+                    )
+                }
+            };
+            return Ok((
+                ForDomain::Range {
+                    start: a,
+                    end: b,
+                    step,
+                },
+                after_step,
+            ));
+        }
+        if force_date {
+            bail!("DATE 范围需要 '..'，例如 DATE '2024-01-01'..'2024-01-31'");
         }
     }
-    bail!("FOR ... IN 需要 ('a','b')、1..12 或 GLOB 'pat'");
+    bail!("FOR ... IN 需要 ('a','b')、1..12、'2024-01-01'..'2024-01-31' 或 GLOB 'pat'");
+}
+
+fn parse_range_bound(s: &str, i: usize) -> Option<(String, usize, bool)> {
+    let i = skip_ws(s, i);
+    if i < s.len() {
+        let b = s.as_bytes()[i];
+        if b == b'\'' || b == b'"' {
+            let (val, end) = parse_string_literal(s, i).ok()?;
+            return Some((val, end, true));
+        }
+    }
+    if let Some((n, end)) = parse_int_at(s, i) {
+        return Some((n.to_string(), end, false));
+    }
+    None
+}
+
+enum StepTok {
+    Count(i64),
+    Months(i64),
+}
+
+fn parse_optional_step(s: &str, i: usize) -> Result<(Option<StepTok>, usize)> {
+    let i = skip_ws(s, i);
+    let Some((kw, after)) = parse_ident(s, i) else {
+        return Ok((None, i));
+    };
+    if !kw.eq_ignore_ascii_case("step") {
+        return Ok((None, i));
+    }
+    let j = skip_ws(s, after);
+    if let Some((n, after_n)) = parse_int_at(s, j) {
+        let k = skip_ws(s, after_n);
+        if let Some((unit, after_unit)) = parse_ident(s, k) {
+            if unit.eq_ignore_ascii_case("month") || unit.eq_ignore_ascii_case("months") {
+                return Ok((Some(StepTok::Months(n)), after_unit));
+            }
+            if unit.eq_ignore_ascii_case("day") || unit.eq_ignore_ascii_case("days") {
+                return Ok((Some(StepTok::Count(n)), after_unit));
+            }
+        }
+        return Ok((Some(StepTok::Count(n)), after_n));
+    }
+    if let Some((unit, after_unit)) = parse_ident(s, j) {
+        if unit.eq_ignore_ascii_case("month") || unit.eq_ignore_ascii_case("months") {
+            return Ok((Some(StepTok::Months(1)), after_unit));
+        }
+        if unit.eq_ignore_ascii_case("day") || unit.eq_ignore_ascii_case("days") {
+            return Ok((Some(StepTok::Count(1)), after_unit));
+        }
+        bail!("STEP 需要整数、MONTH 或 n MONTH");
+    }
+    bail!("STEP 需要整数或 MONTH");
+}
+
+fn looks_like_compact_date(n: i64) -> bool {
+    if n < 0 {
+        return false;
+    }
+    let digits = n.to_string().len();
+    match digits {
+        8 => (19000101..=20991231).contains(&n),
+        6 => (190001..=209912).contains(&n),
+        _ => false,
+    }
 }
 
 fn parse_int_at(s: &str, start: usize) -> Option<(i64, usize)> {
@@ -879,6 +1011,47 @@ mod tests {
                     assert_eq!((*start, *end, *step), (1, 3, 1));
                 }
                 _ => panic!("range"),
+            },
+            _ => panic!("load"),
+        }
+    }
+
+    #[test]
+    fn parse_for_date_range() {
+        let stmts = parse_script(
+            "LOAD t FROM 'https://x/${d}' FOR d IN '2024-01-01'..'2024-01-03'; \
+             LOAD u FROM 'https://x/${m}' FOR m IN DATE '2024-01'..'2024-12' STEP MONTH; \
+             LOAD v FROM 'https://x/${d}' FOR d IN 20240101..20240103 STEP 1",
+        )
+        .unwrap();
+        match &stmts[0] {
+            ScriptStmt::Load(l) => match &l.fors[0].domain {
+                ForDomain::Dates { start, end, step } => {
+                    assert_eq!(start, "2024-01-01");
+                    assert_eq!(end, "2024-01-03");
+                    assert_eq!(*step, ForDateStep::Default);
+                }
+                other => panic!("expected dates, got {other:?}"),
+            },
+            _ => panic!("load"),
+        }
+        match &stmts[1] {
+            ScriptStmt::Load(l) => match &l.fors[0].domain {
+                ForDomain::Dates { step, .. } => {
+                    assert_eq!(*step, ForDateStep::Months(1));
+                }
+                other => panic!("expected dates, got {other:?}"),
+            },
+            _ => panic!("load"),
+        }
+        match &stmts[2] {
+            ScriptStmt::Load(l) => match &l.fors[0].domain {
+                ForDomain::Dates { start, end, step } => {
+                    assert_eq!(start, "20240101");
+                    assert_eq!(end, "20240103");
+                    assert_eq!(*step, ForDateStep::Count(1));
+                }
+                other => panic!("expected compact dates, got {other:?}"),
             },
             _ => panic!("load"),
         }

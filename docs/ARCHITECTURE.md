@@ -320,7 +320,7 @@ Excel 格式本身难以流式谓词下推（xlsx 是 ZIP+XML），超大 xlsx �
 ### 7.1 查询与清理（核心）
 
 - 标准 SQL：JOIN、GROUP BY、窗口、CTE、子查询（引擎能力范围内）  
-- 数据质量函数（P1，用 SQLite 自定义函数或宏）：`try_int`、`parse_date`、`nullif_blank`、`normalize_phone`  
+- 数据质量函数（已落地日期）：`parse_date`、`parse_datetime`、`from_unix`、`to_unix`、`excel_serial`；后续可加 `try_int`、`nullif_blank`、`normalize_phone`  
 - `DESCRIBE read_excel('a.xlsx')` / `--schema`：只推断 schema 不跑全查询  
 - `--limit` 预览、`--explain` 打印改写后的 SQL 与各连接器耗时
 

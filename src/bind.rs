@@ -383,6 +383,14 @@ fn eval_domain(domain: &ForDomain, bind: &BindCtx) -> Result<Vec<Vec<Value>>> {
             }
             Ok(out)
         }
+        ForDomain::Dates { start, end, step } => {
+            let start = bind.interpolate(start, Missing::Error)?;
+            let end = bind.interpolate(end, Missing::Error)?;
+            Ok(crate::dates::expand_range(&start, &end, *step)?
+                .into_iter()
+                .map(|s| vec![Value::Str(s)])
+                .collect())
+        }
         ForDomain::Glob(pat) => {
             let pat = bind.interpolate(pat, Missing::Error)?;
             Ok(glob_values(&pat)?.into_iter().map(|v| vec![v]).collect())
@@ -458,6 +466,44 @@ mod tests {
                 vec![Value::Int(1)],
                 vec![Value::Int(2)],
                 vec![Value::Int(3)]
+            ]
+        );
+    }
+
+    #[test]
+    fn date_range_expands_iso_strings() {
+        let d = ForDomain::Dates {
+            start: "2024-01-01".into(),
+            end: "2024-01-03".into(),
+            step: crate::syntax::ForDateStep::Default,
+        };
+        let v = eval_domain(&d, &BindCtx::default()).unwrap();
+        assert_eq!(
+            v,
+            vec![
+                vec![Value::Str("2024-01-01".into())],
+                vec![Value::Str("2024-01-02".into())],
+                vec![Value::Str("2024-01-03".into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn date_range_interpolates_bounds() {
+        let mut b = BindCtx::default();
+        b.set("start", Value::Str("2024-01".into()));
+        b.set("end", Value::Str("2024-02".into()));
+        let d = ForDomain::Dates {
+            start: "${start}".into(),
+            end: "${end}".into(),
+            step: crate::syntax::ForDateStep::Default,
+        };
+        let v = eval_domain(&d, &b).unwrap();
+        assert_eq!(
+            v,
+            vec![
+                vec![Value::Str("2024-01".into())],
+                vec![Value::Str("2024-02".into())],
             ]
         );
     }

@@ -80,6 +80,10 @@ LOAD items FROM 'https://api.example.com/items' WITH (
 -- 工作簿全部同构 sheet
 LOAD book FROM 'workbook.xlsx' WITH (format='excel', sheet='*');
 SELECT _sheet, COUNT(*) FROM book GROUP BY _sheet;
+
+-- 按日拉接口，不必手写 31 个 URL
+LOAD orders FROM '${base}/orders?dt=${d}' WITH (format='json', json_path='data')
+FOR d IN '2024-01-01'..'2024-01-31';
 ```
 
 ```bash

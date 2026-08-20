@@ -4,7 +4,6 @@ use crate::ingest::{ingest_rows, Cell, IngestOpts};
 use crate::schema::unique_column_names;
 use anyhow::{Context, Result};
 use calamine::{open_workbook_auto, Data, Reader};
-use chrono::{Duration, NaiveDate};
 
 pub struct ReadExcelExt;
 
@@ -199,28 +198,6 @@ fn datetime_cell(d: &calamine::ExcelDateTime) -> String {
             s
         }
     } else {
-        excel_serial_to_iso(d.as_f64())
-    }
-}
-
-fn excel_serial_to_iso(serial: f64) -> String {
-    if !serial.is_finite() {
-        return serial.to_string();
-    }
-    let days = serial.trunc() as i64;
-    let frac_secs = (serial.fract().abs() * 86400.0).round() as i64;
-    let Some(base) = NaiveDate::from_ymd_opt(1899, 12, 30) else {
-        return serial.to_string();
-    };
-    let Some(date) = base.checked_add_signed(Duration::days(days)) else {
-        return serial.to_string();
-    };
-    if frac_secs == 0 {
-        date.format("%Y-%m-%d").to_string()
-    } else {
-        let h = frac_secs / 3600;
-        let m = (frac_secs % 3600) / 60;
-        let s = frac_secs % 60;
-        format!("{} {:02}:{:02}:{:02}", date.format("%Y-%m-%d"), h, m, s)
+        crate::dates::excel_serial_display(d.as_f64())
     }
 }

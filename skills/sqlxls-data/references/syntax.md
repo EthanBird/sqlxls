@@ -78,7 +78,7 @@ LOAD orders FROM 'https://api.example.com/query' WITH (
 
 - 超时 30s。HTML 错误页不当 Excel，会报错。
 - 未提供 Authorization 且设置了 `SQLXLS_BEARER_TOKEN` 时自动带 Bearer。
-- 无分页。多页需要用户明确 URL 模式时再循环多次 `LOAD` + `INSERT`，或先下载再查。
+- `page_param` / `offset_param`：空页停止。多页不要手写 N 次 LOAD。见 [dynamic.md](dynamic.md)。
 
 JSON 根对象未指定路径时，会尝试 `data` / `items` / `results` / `records` / `rows`，否则取第一个数组。字段取**行 key 并集**。
 

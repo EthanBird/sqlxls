@@ -27,12 +27,28 @@ CAST(x AS TEXT)
 typeof(amount)          -- 单值诊断
 ```
 
-Excel 日期是 **ISO 文本**（不是 Excel 序列）。用文本比较或 `date()`：
+Excel 日期是 **ISO 文本**（不是 Excel 序列）。用文本比较、SQLite 自带函数，或 sqlxls 注册的转换函数：
 
 ```sql
 WHERE "日期" >= '2024-01-01'
 SELECT date("日期") AS d, strftime('%Y-%m', "日期") AS ym
+
+-- 杂乱字符串 / 时间戳 / 仍是序列的列
+SELECT
+  parse_date(col) AS d,                 -- 2024-01-15、20240115；日月都 ≤12 时不要靠自动
+  parse_date(col, 'dmy') AS d_eu,       -- 15/01/2024
+  parse_date(col, 'mdy') AS d_us,       -- 01/15/2024
+  parse_date(col, '%Y年%m月%d日') AS d_cn,
+  parse_datetime(ts) AS dt,
+  from_unix(epoch) AS dt_unix,          -- 秒；|x| ≥ 1e12 当毫秒
+  to_unix(ts) AS epoch,
+  excel_serial(n) AS d_xl               -- 与 xlsx 导入相同
+FROM t;
 ```
+
+解析失败返回 NULL，不报错。未知格式名（不是 `iso`/`ymd`/`dmy`/`mdy`/`yyyymmdd` 也没有 `%`）会报错。
+
+按日/月拉多个源不要手写列表，用 Source 层区间：`FOR d IN '2024-01-01'..'2024-01-31'`，见 [dynamic.md](dynamic.md)。
 
 空单元格是 NULL。空白字符串不是 NULL：
 

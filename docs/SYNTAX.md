@@ -33,7 +33,7 @@ SELECT * FROM read_excel('a.xlsx', 'Sheet1', 2, 'str')
 
 1. **两层语言，互不侵入**  
    - **Source 语言**：只负责「把外部数据变成表」。封闭、命名参数、可版本化。  
-   - **Query 语言**：物化之后的 `SELECT` / `WITH` / `JOIN` 必须是引擎的标准 SQL，0 个自定义函数。
+   - **Query 语言**：物化之后的 `SELECT` / `WITH` / `JOIN` 是引擎 SQL。不在查询里发明循环、表函数或宏。允许少量确定性标量（日期解析），失败返回 NULL。
 2. **一个构造器**  
    规范形式只有 `read(locator, 命名选项…)`。`read_excel` 等是语法糖，desugar 到 `read`。
 3. **第一个参数永远是定位符，其余一律命名**  
@@ -76,7 +76,12 @@ for_vars        = ident { "," ident }
 
 for_domain      = "(" value { "," value } ")"
                 | integer ".." integer [ "STEP" integer ]
+                | [ "DATE" ] range_bound ".." range_bound [ "STEP" date_step ]
                 | "GLOB" locator ;
+
+range_bound     = integer | string ;    (* 日：2024-01-15 / 20240115；月：2024-01 / 202401 *)
+
+date_step       = integer | "MONTH" | integer "MONTH" | integer "DAY" ;
 
 locator         = string ;              (* URI 或路径 *)
 
@@ -97,8 +102,8 @@ value           = string | number | boolean | "null" | read_call ;
 
 ident           = letter { letter | digit | "_" } ;
 
-(* 查询层：不得再出现自定义函数。
-   过渡期允许 table_factor 上的 read_call，见 §5。 *)
+(* 查询层：不发明循环/表函数。过渡期允许 table_factor 上的 read_call，见 §5。
+   日期标量 parse_date / parse_datetime / from_unix / to_unix / excel_serial 由引擎注册。 *)
 ```
 
 动态展开（相似 URL、目录、分页、多 Sheet）见 [DYNAMIC.md](./DYNAMIC.md)。默认扇入为一张表 + `_source` / `_region` / `_page` / `_sheet`，查询仍是标准 SQL。

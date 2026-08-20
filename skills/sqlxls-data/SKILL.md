@@ -102,12 +102,13 @@ ORDER BY total DESC;
 - 未知 `WITH` 选项会报错。按 format 使用关闭选项集，见 [references/syntax.md](references/syntax.md)。
 - 默认**另存**，不要覆盖用户原始工作簿。
 - 相似但不相同的源（换 URL 参数、换文件名）：`SET` + `${var}`，或 `FOR region IN ('east','west')`，最后 **一张表 + `_region`**。禁止复制 N 段几乎一样的 LOAD/SELECT。
+- 日期窗口：`FOR d IN '2024-01-01'..'2024-01-31'` 或 `FOR ym IN '2024-01'..'2024-12'`，不要手写日历。列转换用 `parse_date` / `from_unix` / `excel_serial`（见 sql-dialect），不要为每种格式复制 SELECT。
 - 目录同质表：`LOAD t FROM EACH GLOB './sales_*.csv'` 或 `LOAD t FROM './sales_*.csv'`，用 `_source` 分组。
 - HTTP 分页：`page_param='page'`，空页停止；不要手写 page=1..n 的 N 条 SQL。
 - 工作簿多个同构 sheet：`sheet='*'`，用 `_sheet` 分组。
 - Token 走环境变量：`SQLXLS_BEARER_TOKEN` 或 `'{"Authorization":"Bearer ${TOKEN}"}'`。不要把密钥写进提交的 `.sql`。
 - 字符串用单引号，标识符用双引号。拼接用 `||`。大小写不敏感匹配用 `LOWER(x) = LOWER(y)` 或 `COLLATE NOCASE`，没有 `ILIKE`。
-- 类型由导入时抽样推断（最多约 200 行）。混型列会变成 TEXT；需要数字时 `CAST(x AS REAL)`。Excel 日期导入为 ISO 文本。
+- 类型由导入时抽样推断（最多约 200 行）。混型列会变成 TEXT；需要数字时 `CAST(x AS REAL)`。Excel 日期导入为 ISO 文本；杂乱字符串用 `parse_date(col, 'dmy')`。
 - 目录合并按**列名**对齐，缺列填 NULL，不要假设列顺序一致。
 
 ## 5. CLI 速查

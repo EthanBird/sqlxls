@@ -43,7 +43,23 @@ LOAD sales FROM EACH GLOB './sales_*.xlsx' WITH (format='excel', sheet='Sheet1')
 SELECT _source, SUM(amount) FROM sales GROUP BY _source;
 ```
 
-`FOR x IN 1..12`、`IN 1..10 STEP 2`、`IN GLOB 'pat'`。后面的 FOR 可以用前面的变量。来源列：`FOR region` → `_region`；定位符 → `_source`。
+`FOR x IN 1..12`、`IN 1..10 STEP 2`、`IN GLOB 'pat'`。
+
+日期不要手写 31 天：
+
+```sql
+LOAD orders FROM '${base}/orders?dt=${d}' WITH (format='json')
+FOR d IN '2024-01-01'..'2024-01-31';          -- 日
+LOAD sales FROM './${ym}.csv' FOR ym IN '2024-01'..'2024-12';  -- 月
+LOAD t FROM '${base}/${d}' WITH (format='json')
+FOR d IN DATE '2024-01-01'..'2024-12-31' STEP MONTH;
+LOAD t FROM '${base}/${d}' WITH (format='json')
+FOR d IN '${start}'..'${end}' STEP 7;
+```
+
+查询层转换：`parse_date(x)` / `parse_date(x,'dmy'|'mdy'|'ymd')` / `from_unix` / `to_unix` / `excel_serial`；失败为 NULL。`01/02/2024` 必须写格式。
+
+后面的 FOR 可以用前面的变量。来源列：`FOR region` → `_region`；定位符 → `_source`。
 
 ## 连接器展开
 

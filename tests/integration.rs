@@ -563,3 +563,59 @@ fn with_query_param_replaces_existing() {
         "https://x/a?page=1"
     );
 }
+
+#[test]
+fn date_range_for_and_sql_converters() {
+    let dir = temp_dir();
+    for d in ["2024-01-01", "2024-01-02", "2024-01-03"] {
+        fs::write(dir.join(format!("{d}.csv")), format!("day,n\n{d},1\n")).unwrap();
+    }
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD t FROM '{}/${{d}}.csv' FOR d IN '2024-01-01'..'2024-01-03';\n\
+         SELECT COUNT(*) AS n FROM t",
+        dir.display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 3);
+    let days: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(DISTINCT _d) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(days, 3);
+
+    let parsed: String = s
+        .connection()
+        .query_row("SELECT parse_date('15/01/2024', 'dmy')", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(parsed, "2024-01-15");
+    let compact: String = s
+        .connection()
+        .query_row("SELECT parse_date(20240115)", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(compact, "2024-01-15");
+    let unix: String = s
+        .connection()
+        .query_row("SELECT from_unix(1700000000)", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(unix, "2023-11-14 22:13:20");
+    let ms: String = s
+        .connection()
+        .query_row("SELECT from_unix(1700000000000)", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ms, "2023-11-14 22:13:20");
+    let serial: String = s
+        .connection()
+        .query_row("SELECT excel_serial(44927)", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(serial, "2023-01-01");
+    let bad: Option<String> = s
+        .connection()
+        .query_row("SELECT parse_date('01/02/2024')", [], |r| r.get(0))
+        .unwrap();
+    assert!(bad.is_none(), "ambiguous D/M must stay NULL without fmt");
+}

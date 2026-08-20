@@ -22,6 +22,7 @@ impl Session {
 
     pub fn with_opts(opts: SyntaxOpts) -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        crate::dates::register(&conn)?;
         conn.pragma_update(None, "synchronous", "OFF")?;
         conn.pragma_update(None, "temp_store", "MEMORY")?;
         conn.pragma_update(None, "cache_size", "-64000")?;
