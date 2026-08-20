@@ -1,43 +1,48 @@
-use crate::engine::Extension;
-use anyhow::Result;
-use fake::{Fake, faker};
-use regex::Regex;
-use rusqlite::Connection;
-use crate::engine::ExtResult;
+use crate::args::Args;
+use crate::functions::{ExecCtx, FuncOutput, TableFunction};
+use crate::ingest::{ingest_rows, Cell, IngestOpts};
+use anyhow::{bail, Result};
+use fake::{faker, Fake};
+
 pub struct MockDataExt;
 
-impl Extension for MockDataExt {
-    fn pattern(&self) -> Regex {
-        // 匹配 mock_data(数量, '列1:类型', '列2:类型'...)
-        Regex::new(r#"(?i)mock_data\s*\(\s*(\d+)\s*(?P<cols>.*)\)"#).unwrap()
+impl TableFunction for MockDataExt {
+    fn names(&self) -> &'static [&'static str] {
+        &["mock_data", "mockdata"]
     }
 
-    fn execute(&self, conn: &mut Connection, captures: &regex::Captures, table_name: &str) -> Result<ExtResult> {
-        let count: usize = captures[1].parse()?;
-        let cols_raw = &captures["cols"];
-        
-        // 提取所有 'name:type' 格式的参数
-        let re_col = Regex::new(r#"['"]([^'"]+):([^'"]+)['"]"#).unwrap();
-        let mut col_defs = Vec::new();
-        for cap in re_col.captures_iter(cols_raw) {
-            col_defs.push((cap[1].to_string(), cap[2].to_string()));
+    fn execute(&self, ctx: &mut ExecCtx, args: &Args) -> Result<FuncOutput> {
+        let count = args.get_usize(0, &["n", "count", "rows"], 0);
+        if count == 0 {
+            bail!("mock_data 需要生成行数，例如 mock_data(10, '用户名:name')");
         }
 
-        // 创建表
-        let mut create_sql = format!("CREATE TABLE {} (", table_name);
-        for (name, _) in &col_defs {
-            create_sql.push_str(&format!("\"{}\", ", name));
+        let mut col_defs: Vec<(String, String)> = Vec::new();
+        for (i, v) in args.positional.iter().enumerate() {
+            if i == 0 {
+                continue;
+            }
+            if let Some(s) = v.as_str() {
+                push_col_def(&mut col_defs, s);
+            }
         }
-        create_sql.truncate(create_sql.len() - 2);
-        create_sql.push(')');
-        conn.execute(&create_sql, [])?;
+        for (k, v) in &args.named {
+            if matches!(k.as_str(), "n" | "count" | "rows") {
+                continue;
+            }
+            if let Some(s) = v.as_str() {
+                col_defs.push((k.clone(), s.to_string()));
+            }
+        }
 
-        // 生成并插入数据
-        let placeholders = vec!["?"; col_defs.len()].join(", ");
-        let mut stmt = conn.prepare(&format!("INSERT INTO {} VALUES ({})", table_name, placeholders))?;
+        if col_defs.is_empty() {
+            bail!("mock_data 需要至少一列，格式: '列名:类型'");
+        }
 
+        let headers: Vec<String> = col_defs.iter().map(|(n, _)| n.clone()).collect();
+        let mut rows = Vec::with_capacity(count);
         for _ in 0..count {
-            let mut row_data = Vec::new();
+            let mut row = Vec::with_capacity(col_defs.len());
             for (_, type_str) in &col_defs {
                 let val: String = match type_str.to_lowercase().as_str() {
                     "name" => faker::name::en::Name().fake(),
@@ -47,15 +52,32 @@ impl Extension for MockDataExt {
                     "city" => faker::address::en::CityName().fake(),
                     _ => "N/A".to_string(),
                 };
-                row_data.push(val);
+                row.push(Cell::Text(val));
             }
-            let params: Vec<&dyn rusqlite::ToSql> = row_data.iter()
-                .map(|v| v as &dyn rusqlite::ToSql)
-                .collect();
-            stmt.execute(&*params)?;
+            rows.push(row);
         }
 
-        println!("🎲 已生成 {} 条模拟数据到表: {}", count, table_name);
-        Ok(ExtResult::Table)
+        ingest_rows(
+            ctx.conn,
+            &ctx.dest_table,
+            &headers,
+            rows,
+            IngestOpts {
+                force_str: true,
+                append: false,
+            },
+        )?;
+        println!("🎲 已生成 {} 条模拟数据到表: {}", count, ctx.dest_table);
+        Ok(FuncOutput::Table)
+    }
+}
+
+fn push_col_def(cols: &mut Vec<(String, String)>, spec: &str) {
+    if let Some((name, ty)) = spec.split_once(':') {
+        let name = name.trim();
+        let ty = ty.trim();
+        if !name.is_empty() && !ty.is_empty() {
+            cols.push((name.to_string(), ty.to_string()));
+        }
     }
 }
