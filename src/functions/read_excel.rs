@@ -1,7 +1,7 @@
 use crate::args::Args;
 use crate::functions::{ExecCtx, FuncOutput, TableFunction};
 use crate::ingest::{ingest_rows, Cell, IngestOpts};
-use crate::schema::unique_column_names;
+use crate::schema::{table_width, HeaderSpec};
 use anyhow::{Context, Result};
 use calamine::{open_workbook_auto, Data, Reader};
 
@@ -28,8 +28,13 @@ impl TableFunction for ReadExcelExt {
             }
             let mut first = true;
             for sheet in &names {
-                let (mut headers, mut rows) =
-                    excel_to_frame(&spec.path, Some(sheet), spec.skip, spec.force_str)?;
+                let (mut headers, mut rows) = excel_to_frame(
+                    &spec.path,
+                    Some(sheet),
+                    spec.skip,
+                    spec.force_str,
+                    &spec.header,
+                )?;
                 if add_source {
                     crate::ingest::attach_const_column(
                         &mut headers,
@@ -53,8 +58,13 @@ impl TableFunction for ReadExcelExt {
             return Ok(FuncOutput::Table);
         }
 
-        let (headers, rows) =
-            excel_to_frame(&spec.path, spec.sheet.as_deref(), spec.skip, spec.force_str)?;
+        let (headers, rows) = excel_to_frame(
+            &spec.path,
+            spec.sheet.as_deref(),
+            spec.skip,
+            spec.force_str,
+            &spec.header,
+        )?;
         ingest_rows(
             ctx.conn,
             &ctx.dest_table,
@@ -74,6 +84,7 @@ pub struct ExcelSpec {
     pub sheet: Option<String>,
     pub skip: usize,
     pub force_str: bool,
+    pub header: HeaderSpec,
 }
 
 fn is_str_flag(args: &Args, index: usize) -> bool {
@@ -107,6 +118,7 @@ pub fn parse_excel_args(args: &Args) -> Result<ExcelSpec> {
         sheet,
         skip,
         force_str,
+        header: HeaderSpec::from_args(args)?,
     })
 }
 
@@ -115,6 +127,7 @@ pub fn excel_to_frame(
     sheet_opt: Option<&str>,
     skip_rows: usize,
     force_str: bool,
+    header: &HeaderSpec,
 ) -> Result<(Vec<String>, Vec<Vec<Cell>>)> {
     let mut workbook =
         open_workbook_auto(path).with_context(|| format!("无法打开 Excel: {}", path))?;
@@ -131,30 +144,46 @@ pub fn excel_to_frame(
         .with_context(|| format!("未找到 Sheet: {}", sheet_name))?;
 
     let mut iter = range.rows().skip(skip_rows);
-    let header_row = iter.next().context("跳过指定行后没有任何数据（无表头）")?;
-    let raw_headers: Vec<String> = header_row
-        .iter()
-        .enumerate()
-        .map(|(i, cell)| match cell {
-            Data::String(s) if !s.trim().is_empty() => s.trim().to_string(),
-            Data::Int(n) => n.to_string(),
-            Data::Float(f) => f.to_string(),
-            _ => format!("col_{}", i),
-        })
-        .collect();
-    let headers = unique_column_names(raw_headers);
-    let width = headers.len();
+    let file_headers = if header.has_header {
+        let header_row = iter
+            .next()
+            .context("跳过指定行后没有任何数据（无表头）。若第一行就是数据，请写 header=false")?;
+        Some(header_row.iter().map(header_cell_text).collect::<Vec<_>>())
+    } else {
+        None
+    };
 
-    let mut rows = Vec::new();
+    let mut rows: Vec<Vec<Cell>> = Vec::new();
+    let mut data_width = 0usize;
     for row in iter {
-        let mut cells = Vec::with_capacity(width);
-        for i in 0..width {
-            let cell = row.get(i).unwrap_or(&Data::Empty);
-            cells.push(data_to_cell(cell, force_str));
+        data_width = data_width.max(row.len());
+        rows.push(row.iter().map(|c| data_to_cell(c, force_str)).collect());
+    }
+
+    let width = table_width(header, file_headers.as_ref().map(|h| h.len()), data_width);
+    if width == 0 {
+        anyhow::bail!(
+            "Excel 没有数据。无表头文件请写 header=false，自定义列名用 columns='id,name'"
+        );
+    }
+    let headers = header.resolve(width, file_headers.as_deref());
+    for row in &mut rows {
+        if row.len() > width {
+            row.truncate(width);
+        } else {
+            row.resize(width, Cell::Null);
         }
-        rows.push(cells);
     }
     Ok((headers, rows))
+}
+
+fn header_cell_text(cell: &Data) -> String {
+    match cell {
+        Data::String(s) if !s.trim().is_empty() => s.trim().to_string(),
+        Data::Int(n) => n.to_string(),
+        Data::Float(f) => f.to_string(),
+        _ => String::new(),
+    }
 }
 
 pub fn excel_sheet_names(path: &str) -> Result<Vec<String>> {

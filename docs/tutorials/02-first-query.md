@@ -82,7 +82,7 @@ SELECT CAST(amount AS REAL) AS amount FROM t;
 | `no such column: 销售额` | 中文列没加双引号 |
 | `LOAD` 失败「表名」 | 用了中文表名 |
 | 只看到最后一段结果 | 设计如此：只有最后一条查询输出 |
-| `未知选项 foo` | `WITH` 里写了该 format 不认识的名字 |
+| 没有表头 / 第一行变成了列名 | 写 `header=false`；要自己起名再加 `columns='id,name'` |
 
 ## 下一步
 

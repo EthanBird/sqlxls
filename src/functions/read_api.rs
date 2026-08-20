@@ -4,6 +4,7 @@ use crate::functions::read_excel::excel_to_frame;
 use crate::functions::read_json::{default_table_value, extract_json_path, value_to_rows};
 use crate::functions::{ExecCtx, FuncOutput, TableFunction};
 use crate::ingest::{attach_const_column, ingest_rows, Cell, IngestOpts};
+use crate::schema::HeaderSpec;
 use anyhow::{bail, Context, Result};
 use std::env;
 use std::fs::File;
@@ -45,6 +46,7 @@ impl TableFunction for ReadApiExt {
             .get_str(99, &["delim", "delimiter", "sep"])
             .map(|s| crate::functions::read_csv::parse_delim(&s));
         let force_str = args.get_bool(99, &["str", "force_str"]);
+        let header = HeaderSpec::from_args(args)?;
         let body = HttpBodyOpts {
             format: format.as_deref(),
             encoding: encoding.as_deref(),
@@ -53,6 +55,7 @@ impl TableFunction for ReadApiExt {
             skip,
             delim,
             force_str,
+            header,
         };
 
         let client = reqwest::blocking::Client::builder()
@@ -73,7 +76,7 @@ impl TableFunction for ReadApiExt {
                 &bytes,
                 &content_type,
                 &url,
-                body,
+                &body,
                 false,
                 &[],
             )?;
@@ -120,7 +123,7 @@ impl TableFunction for ReadApiExt {
                     &bytes,
                     &content_type,
                     &page_url,
-                    body,
+                    &body,
                     !first,
                     &extras,
                 )?;
@@ -152,7 +155,7 @@ impl TableFunction for ReadApiExt {
                     &bytes,
                     &content_type,
                     &page_url,
-                    body,
+                    &body,
                     !first,
                     &extras,
                 )?;
@@ -302,7 +305,7 @@ pub fn expand_env(s: &str) -> String {
     out
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct HttpBodyOpts<'a> {
     pub format: Option<&'a str>,
     pub encoding: Option<&'a str>,
@@ -311,6 +314,7 @@ pub struct HttpBodyOpts<'a> {
     pub skip: usize,
     pub delim: Option<u8>,
     pub force_str: bool,
+    pub header: HeaderSpec,
 }
 
 impl<'a> HttpBodyOpts<'a> {
@@ -323,6 +327,7 @@ impl<'a> HttpBodyOpts<'a> {
             skip: 0,
             delim: None,
             force_str: false,
+            header: HeaderSpec::default(),
         }
     }
 }
@@ -333,7 +338,7 @@ pub fn ingest_http_bytes(
     bytes: &[u8],
     content_type: &str,
     url: &str,
-    opts: HttpBodyOpts<'_>,
+    opts: &HttpBodyOpts<'_>,
     append: bool,
     extras: &[(String, String)],
 ) -> Result<usize> {
@@ -402,6 +407,7 @@ pub fn ingest_http_bytes(
             opts.force_str,
             append,
             extras,
+            &opts.header,
         )
         .with_context(|| {
             format!(
@@ -457,7 +463,7 @@ fn ingest_excel_bytes(
     table: &str,
     bytes: &[u8],
     trimmed: &[u8],
-    opts: HttpBodyOpts<'_>,
+    opts: &HttpBodyOpts<'_>,
     append: bool,
     extras: &[(String, String)],
 ) -> Result<usize> {
@@ -478,6 +484,7 @@ fn ingest_excel_bytes(
         opts.sheet,
         opts.skip,
         opts.force_str,
+        &opts.header,
     );
     let _ = std::fs::remove_file(&temp_path);
     let (mut headers, mut rows) = frame?;
@@ -507,12 +514,13 @@ fn ingest_csv_with_extras(
     force_str: bool,
     append: bool,
     extras: &[(String, String)],
+    header: &HeaderSpec,
 ) -> Result<usize> {
     if extras.is_empty() {
-        return load_csv_text(conn, table, text, delim, skip, force_str, append);
+        return load_csv_text(conn, table, text, delim, skip, force_str, append, header);
     }
     let tmp = format!("{table}__page");
-    let n = load_csv_text(conn, &tmp, text, delim, skip, force_str, false)?;
+    let n = load_csv_text(conn, &tmp, text, delim, skip, force_str, false, header)?;
     crate::ingest::union_from_table(conn, table, &tmp, extras, append)?;
     conn.execute(&format!("DROP TABLE IF EXISTS {tmp}"), [])?;
     Ok(n)

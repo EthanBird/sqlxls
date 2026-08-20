@@ -1,6 +1,7 @@
 use crate::args::Args;
 use crate::functions::{ExecCtx, FuncOutput, TableFunction};
 use crate::ingest::{ingest_rows, Cell, IngestOpts};
+use crate::schema::{table_width, HeaderSpec};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -19,6 +20,7 @@ impl TableFunction for ReadCsvExt {
             .get_str(1, &["delim", "delimiter", "sep"])
             .map(|s| parse_delim(&s));
         let encoding = args.get_str(99, &["encoding", "charset"]);
+        let header = HeaderSpec::from_args(args)?;
         load_csv_path(
             ctx.conn,
             &ctx.dest_table,
@@ -28,6 +30,7 @@ impl TableFunction for ReadCsvExt {
             force_str,
             false,
             encoding.as_deref(),
+            &header,
         )?;
         Ok(FuncOutput::Table)
     }
@@ -62,39 +65,53 @@ pub fn load_csv_text(
     skip: usize,
     force_str: bool,
     append: bool,
+    header: &HeaderSpec,
 ) -> Result<usize> {
     let skipped = skip_lines(text, skip);
     let delim = delim.unwrap_or_else(|| sniff_delim(skipped));
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(delim)
         .flexible(true)
+        .has_headers(header.has_header)
         .from_reader(skipped.as_bytes());
-    let headers: Vec<String> = rdr
-        .headers()
-        .with_context(|| "CSV 表头读取失败")?
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    if headers.is_empty() {
-        anyhow::bail!("CSV 没有表头");
-    }
-    let mut rows = Vec::new();
+    let file_headers: Option<Vec<String>> = if header.has_header {
+        let h: Vec<String> = rdr
+            .headers()
+            .with_context(|| "CSV 表头读取失败")?
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        Some(h)
+    } else {
+        None
+    };
+
+    let mut raw_rows: Vec<Vec<String>> = Vec::new();
+    let mut data_width = 0usize;
     for rec in rdr.records() {
         let rec = rec?;
-        let mut row = Vec::with_capacity(headers.len());
-        for i in 0..headers.len() {
-            let v = rec.get(i).unwrap_or("");
+        data_width = data_width.max(rec.len());
+        raw_rows.push(rec.iter().map(|s| s.to_string()).collect());
+    }
+
+    let width = table_width(header, file_headers.as_ref().map(|h| h.len()), data_width);
+    if width == 0 {
+        anyhow::bail!(
+            "CSV 没有表头或数据。若第一行就是数据，请写 header=false；自定义列名用 columns='id,name'"
+        );
+    }
+    let names = header.resolve(width, file_headers.as_deref());
+
+    let mut rows = Vec::with_capacity(raw_rows.len());
+    for rec in raw_rows {
+        let mut row = Vec::with_capacity(width);
+        for i in 0..width {
+            let v = rec.get(i).map(|s| s.as_str()).unwrap_or("");
             row.push(csv_cell(v, force_str));
         }
         rows.push(row);
     }
-    ingest_rows(
-        conn,
-        table,
-        &headers,
-        rows,
-        IngestOpts { force_str, append },
-    )
+    ingest_rows(conn, table, &names, rows, IngestOpts { force_str, append })
 }
 
 pub fn load_csv_path(
@@ -106,6 +123,7 @@ pub fn load_csv_path(
     force_str: bool,
     append: bool,
     encoding: Option<&str>,
+    header: &HeaderSpec,
 ) -> Result<usize> {
     let bytes = std::fs::read(path).with_context(|| format!("无法读取 CSV: {}", path))?;
     let text = crate::encoding::decode_bytes(&bytes, encoding)?;
@@ -116,7 +134,7 @@ pub fn load_csv_path(
             .filter(|e| e.eq_ignore_ascii_case("tsv"))
             .map(|_| b'\t')
     });
-    load_csv_text(conn, table, &text, delim, skip, force_str, append)
+    load_csv_text(conn, table, &text, delim, skip, force_str, append, header)
 }
 
 fn skip_lines(text: &str, skip: usize) -> &str {

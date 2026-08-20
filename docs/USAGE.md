@@ -105,16 +105,24 @@ ORDER BY total DESC;
 
 | format | 选项 |
 |--------|------|
-| `excel` | `sheet`, `skip`, `str` |
-| `csv` | `delim`/`sep`, `skip`, `str`, `encoding`/`charset` |
+| `excel` | `sheet`, `skip`, `str`, `header`/`has_header`, `columns`/`names`/`colnames` |
+| `csv` | `delim`/`sep`, `skip`, `str`, `encoding`/`charset`, `header`/`has_header`, `columns`/`names`/`colnames` |
 | `json` | `json_path`/`path`, `encoding`/`charset` |
-| `http` | `method`, `body`/`payload`, `headers`, `json_path`, `encoding`, `sheet`, `skip`, `delim`, `str`，以及分页选项 |
-| `glob` | 与被匹配文件相同，外加 `encoding` |
-| `clipboard` | `delim`, `str`, `encoding` |
+| `http` | `method`, `body`/`payload`, `headers`, `json_path`, `encoding`, `sheet`, `skip`, `delim`, `str`，以及分页选项；解码 CSV/Excel 时同样支持 `header`、`columns` |
+| `glob` | 与被匹配文件相同，外加 `encoding`；Excel/CSV 同样支持 `header`、`columns` |
+| `clipboard` | `delim`, `str`, `encoding`；Excel/CSV 同样支持 `header`、`columns` |
 | `text` | `encoding`（**标量**，不能 `FROM read_text(...)`） |
 
 分页（HTTP）：`page_param`, `page_from`, `page_to`, `page_size`, `page_size_param`, `offset_param`, `offset_step`, `stop`。  
 通用：`include_source`（默认带来源列；`false` 关掉）。
+
+Excel / CSV 表头：
+
+- 默认第一行是列名。
+- 没有表头：`header=false`（列名为 `col_0`, `col_1`, …）。
+- 自定义列名：`columns='id,name,金额'`。只改名、不改变「第一行是不是表头」。
+- 无表头又要自己起名：必须 **两个都写** `header=false, columns='…'`。只写 `columns` 仍会把第一行当表头丢掉。
+- `has_header` ≡ `header`；`names` / `colnames` ≡ `columns`。`columns` 也可以是 JSON 数组字符串 `["id","name"]`。
 
 ---
 
