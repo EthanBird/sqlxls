@@ -73,7 +73,15 @@ fn json_union_keys_and_path() {
         "SELECT * FROM read_json('{}', json_path='data')",
         json.display()
     );
-    let rewritten = rewrite_sql(&sql, &mut conn, &reg, &mut c, &SyntaxOpts::default()).unwrap();
+    let rewritten = rewrite_sql(
+        &sql,
+        &mut conn,
+        &reg,
+        &mut c,
+        &SyntaxOpts::default(),
+        &sqlxls::bind::BindCtx::default(),
+    )
+    .unwrap();
     let stmt = conn.prepare(&rewritten).unwrap();
     let names = stmt.column_names();
     assert!(names.contains(&"id"), "{names:?}");
@@ -130,7 +138,15 @@ fn nested_read_text_into_csv() {
         "SELECT * FROM read_csv(read_text('{}')) WHERE x = 3",
         pointer.display()
     );
-    let rewritten = rewrite_sql(&sql, &mut conn, &reg, &mut c, &SyntaxOpts::default()).unwrap();
+    let rewritten = rewrite_sql(
+        &sql,
+        &mut conn,
+        &reg,
+        &mut c,
+        &SyntaxOpts::default(),
+        &sqlxls::bind::BindCtx::default(),
+    )
+    .unwrap();
     assert!(rewritten.contains("excel_tmp_"), "{}", rewritten);
     let n: i64 = conn
         .query_row(&rewritten, [], |r| r.get(0))
@@ -190,6 +206,8 @@ fn html_bytes_are_not_excel() {
         "text/html",
         "https://example.com/data",
         "",
+        false,
+        &[],
     )
     .unwrap_err();
     let msg = format!("{err:#}");
@@ -342,4 +360,151 @@ fn syntax2_allows_canonical_read() {
     .unwrap();
     let sql = format!("SELECT * FROM read('{}', format='csv')", csv.display());
     s.run_sql(&sql, None, false).unwrap();
+}
+
+#[test]
+fn set_interpolates_locator() {
+    let dir = temp_dir();
+    let csv = dir.join("east.csv");
+    fs::write(&csv, "id,n\n1,10\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "SET file = '{p}'; LOAD t FROM '${{file}}'; SELECT n FROM t",
+        p = csv.display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT n FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 10);
+}
+
+#[test]
+fn each_unions_with_source_column() {
+    let dir = temp_dir();
+    fs::write(dir.join("a.csv"), "id,n\n1,10\n").unwrap();
+    fs::write(dir.join("b.csv"), "id,n\n2,20\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD t FROM EACH ('{a}', '{b}'); SELECT SUM(n) AS s FROM t",
+        a = dir.join("a.csv").display(),
+        b = dir.join("b.csv").display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let (sum, files): (i64, i64) = s
+        .connection()
+        .query_row("SELECT SUM(n), COUNT(DISTINCT _source) FROM t", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(sum, 30);
+    assert_eq!(files, 2);
+}
+
+#[test]
+fn for_list_adds_region_column() {
+    let dir = temp_dir();
+    fs::write(dir.join("east.csv"), "id,n\n1,1\n").unwrap();
+    fs::write(dir.join("west.csv"), "id,n\n2,2\n").unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD t FROM '{dir}/${{region}}.csv' FOR region IN ('east', 'west');\n\
+         SELECT _region, SUM(n) AS s FROM t GROUP BY _region ORDER BY _region",
+        dir = dir.display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 2);
+    let east: i64 = s
+        .connection()
+        .query_row("SELECT SUM(n) FROM t WHERE _region = 'east'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(east, 1);
+}
+
+#[test]
+fn glob_adds_source_and_merges_json() {
+    let dir = temp_dir();
+    fs::write(dir.join("a.json"), r#"[{"id":1,"name":"a"}]"#).unwrap();
+    fs::write(dir.join("b.json"), r#"[{"id":2,"extra":true}]"#).unwrap();
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD t FROM '{}' WITH (format='glob'); SELECT COUNT(*) AS n FROM t",
+        dir.join("*.json").display()
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 2);
+}
+
+#[test]
+fn http_pagination_unions_pages() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        for stream in listener.incoming().take(8) {
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            let mut buf = [0u8; 2048];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let page = req
+                .split("page=")
+                .nth(1)
+                .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(1);
+            let body = if page <= 2 {
+                format!(r#"[{{"id":{page}}}]"#)
+            } else {
+                "[]".into()
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+
+    let url = format!("http://{addr}/items");
+    let mut s = Session::new().unwrap();
+    let sql = format!(
+        "LOAD t FROM '{url}' WITH (format='json', page_param='page', page_from=1, page_to=5);\n\
+         SELECT COUNT(*) AS n FROM t"
+    );
+    s.run_sql(&sql, None, false).unwrap();
+    let n: i64 = s
+        .connection()
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 2, "two non-empty pages");
+}
+
+#[test]
+fn with_query_param_replaces_existing() {
+    use sqlxls::functions::read_api::with_query_param;
+    assert_eq!(
+        with_query_param("https://x/a?page=1&q=2", "page", "3"),
+        "https://x/a?page=3&q=2"
+    );
+    assert_eq!(
+        with_query_param("https://x/a", "page", "1"),
+        "https://x/a?page=1"
+    );
 }

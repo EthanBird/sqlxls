@@ -261,7 +261,7 @@ pub trait TableFunction {
    - `text/plain` → 标量或单列表  
    - `text/html` → **报错**（附状态码与 body 前 200 字），绝不当 Excel  
 4. **JSON Path**：`data`、`data.items`、`$.data.items`，解决 `{code, data:[...]}`。  
-5. **分页（P1）**：`page_param` + `page_limit` 或 Link header，合并为同一张表。  
+5. **分页（已落地）**：`page_param` + `page_to`，空页停止；或脚本层 `FOR`。见 [DYNAMIC.md](./DYNAMIC.md)。  
 6. **缓存（P1）**：`~/.cache/sqlxls/` 按 URL+header hash，`ttl` 可配。
 
 ### 5.3 Schema 合并（目录 / 多文件 / 多页 JSON）
@@ -405,8 +405,8 @@ TODO 里的 `UPDATE`/`INSERT` 写回源文件，建议拆成三档，避免一�
 
 ### 第二期 — 远程与分析
 
-- `sqlxls.toml` catalog、结果缓存  
-- HTTP 分页、重试、`${ENV}`  
+- [x] HTTP 分页、`${ENV}` / `SET` / `FOR` / `EACH` 动态源（见 [DYNAMIC.md](./DYNAMIC.md)）  
+- [ ] `sqlxls.toml` catalog、结果缓存  
 - REPL、`--explain` / `--schema`  
 - Parquet 输出；评估 DuckDB feature flag  
 - `read_sql`（Postgres/MySQL 只读）

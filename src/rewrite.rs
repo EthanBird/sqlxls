@@ -2,6 +2,7 @@ use crate::args::{
     matching_paren, parse_arg_list, parse_call_head, parse_ident, skip_sql_noise, skip_ws,
     sql_quote, ArgExpr, ArgSlot, Args, Value,
 };
+use crate::bind::{BindCtx, Missing};
 use crate::classify::{self, SourcePlace};
 use crate::functions::{ExecCtx, FuncOutput, Registry};
 use crate::syntax::{
@@ -67,17 +68,18 @@ pub fn eval_arg_slots(
     registry: &Registry,
     counter: &mut usize,
     opts: &SyntaxOpts,
+    bind: &BindCtx,
 ) -> Result<Args> {
     let mut args = Args::default();
     for slot in slots {
         match slot {
             ArgSlot::Positional(expr) => {
                 args.positional
-                    .push(eval_expr(expr, conn, registry, counter, opts)?);
+                    .push(eval_expr(expr, conn, registry, counter, opts, bind)?);
             }
             ArgSlot::Named(name, expr) => {
                 args.named
-                    .insert(name, eval_expr(expr, conn, registry, counter, opts)?);
+                    .insert(name, eval_expr(expr, conn, registry, counter, opts, bind)?);
             }
         }
     }
@@ -90,11 +92,12 @@ fn eval_expr(
     registry: &Registry,
     counter: &mut usize,
     opts: &SyntaxOpts,
+    bind: &BindCtx,
 ) -> Result<Value> {
     match expr {
         ArgExpr::Literal(v) => Ok(v),
         ArgExpr::Call { name, args } => {
-            match eval_call(&name, args, conn, registry, counter, None, opts)? {
+            match eval_call(&name, args, conn, registry, counter, None, opts, bind)? {
                 CallResult::Table(t) => Ok(Value::Str(t)),
                 CallResult::Scalar(s) => Ok(Value::Str(s)),
             }
@@ -115,7 +118,9 @@ fn eval_call(
     counter: &mut usize,
     dest: Option<String>,
     opts: &SyntaxOpts,
+    bind: &BindCtx,
 ) -> Result<CallResult> {
+    let slots = bind.interpolate_slots(&slots)?;
     validate_source_args(name, &slots, opts)?;
     if !matches!(name.to_ascii_lowercase().as_str(), "mock_data" | "mockdata") {
         if let Some(fmt) = resolve_format(name, &slots) {
@@ -130,7 +135,7 @@ fn eval_call(
         }
     }
     let (name, slots) = desugar_call(name, slots);
-    let args = eval_arg_slots(slots, conn, registry, counter, opts)?;
+    let args = eval_arg_slots(slots, conn, registry, counter, opts, bind)?;
     let dest = dest.unwrap_or_else(|| {
         let t = format!("excel_tmp_{}", *counter);
         *counter += 1;
@@ -154,14 +159,16 @@ pub fn eval_source(
     registry: &Registry,
     counter: &mut usize,
     opts: &SyntaxOpts,
+    bind: &BindCtx,
 ) -> Result<CallOut> {
     match source {
         SourceSpec::Locator { uri, options } => {
-            let mut slots = vec![ArgSlot::Positional(ArgExpr::Literal(Value::Str(
-                uri.clone(),
-            )))];
+            let uri = bind.interpolate(uri, Missing::Error)?;
+            let mut slots = vec![ArgSlot::Positional(ArgExpr::Literal(Value::Str(uri)))];
             slots.extend(options.clone());
-            match eval_call("read", slots, conn, registry, counter, dest_table, opts)? {
+            match eval_call(
+                "read", slots, conn, registry, counter, dest_table, opts, bind,
+            )? {
                 CallResult::Table(t) => Ok(CallOut::Table(t)),
                 CallResult::Scalar(s) => Ok(CallOut::Scalar(s)),
             }
@@ -175,6 +182,7 @@ pub fn eval_source(
                 counter,
                 dest_table,
                 opts,
+                bind,
             )? {
                 CallResult::Table(t) => Ok(CallOut::Table(t)),
                 CallResult::Scalar(s) => Ok(CallOut::Scalar(s)),
@@ -190,6 +198,7 @@ pub fn rewrite_sql(
     registry: &Registry,
     counter: &mut usize,
     opts: &SyntaxOpts,
+    bind: &BindCtx,
 ) -> Result<String> {
     let is_func = |n: &str| registry.is_func(n);
     let mut calls = find_top_level_calls(sql, &is_func)?;
@@ -206,8 +215,9 @@ pub fn rewrite_sql(
         out.push_str(&sql[last..call.start]);
         let slots = parse_arg_list(&call.args_inner, &is_func)?;
         let place = places.get(idx).copied().unwrap_or(SourcePlace::Unknown);
-        let replacement =
-            rewrite_one_call(&call.name, slots, place, conn, registry, counter, opts)?;
+        let replacement = rewrite_one_call(
+            &call.name, slots, place, conn, registry, counter, opts, bind,
+        )?;
         out.push_str(&replacement);
         last = call.end;
     }
@@ -246,6 +256,7 @@ fn rewrite_one_call(
     registry: &Registry,
     counter: &mut usize,
     opts: &SyntaxOpts,
+    bind: &BindCtx,
 ) -> Result<String> {
     let scalar = is_scalar_source(name, &slots);
     match place {
@@ -257,7 +268,7 @@ fn rewrite_one_call(
                 );
             }
             validate_query_source_name(name, opts)?;
-            match eval_call(name, slots, conn, registry, counter, None, opts)? {
+            match eval_call(name, slots, conn, registry, counter, None, opts, bind)? {
                 CallResult::Table(t) => Ok(t),
                 CallResult::Scalar(s) => Ok(sql_quote(&s)),
             }
@@ -279,7 +290,7 @@ fn rewrite_one_call(
                 "⚠️  查询表达式里的 `{}` 已废弃，请改为 LOAD 参数或 read(...) 嵌套调用",
                 name
             );
-            match eval_call(name, slots, conn, registry, counter, None, opts)? {
+            match eval_call(name, slots, conn, registry, counter, None, opts, bind)? {
                 CallResult::Scalar(s) => Ok(sql_quote(&s)),
                 CallResult::Table(t) => Ok(t),
             }
@@ -315,10 +326,11 @@ pub fn eval_standalone(
     registry: &Registry,
     counter: &mut usize,
     opts: &SyntaxOpts,
+    bind: &BindCtx,
 ) -> Result<CallOut> {
     let is_func = |n: &str| registry.is_func(n);
     let slots = parse_arg_list(args_inner, &is_func)?;
-    match eval_call(name, slots, conn, registry, counter, None, opts)? {
+    match eval_call(name, slots, conn, registry, counter, None, opts, bind)? {
         CallResult::Table(t) => Ok(CallOut::Table(t)),
         CallResult::Scalar(s) => Ok(CallOut::Scalar(s)),
     }
@@ -388,7 +400,15 @@ mod tests {
     fn skips_strings_and_comments() {
         let (mut conn, reg, mut c) = sess();
         let sql = "SELECT 'read_csv(\"x\")' AS a -- read_csv('y')\nFROM mock_data(1, 'id:name')";
-        let out = rewrite_sql(sql, &mut conn, &reg, &mut c, &SyntaxOpts::default()).unwrap();
+        let out = rewrite_sql(
+            sql,
+            &mut conn,
+            &reg,
+            &mut c,
+            &SyntaxOpts::default(),
+            &BindCtx::default(),
+        )
+        .unwrap();
         assert!(out.contains("excel_tmp_0"), "{out}");
         assert!(out.contains("read_csv"), "{out}");
     }
@@ -398,7 +418,15 @@ mod tests {
         // mock 不嵌套文件；用 parse 保证括号匹配
         let sql = "SELECT * FROM mock_data(2, '用户:name', '城:city')";
         let (mut conn, reg, mut c) = sess();
-        let out = rewrite_sql(sql, &mut conn, &reg, &mut c, &SyntaxOpts::default()).unwrap();
+        let out = rewrite_sql(
+            sql,
+            &mut conn,
+            &reg,
+            &mut c,
+            &SyntaxOpts::default(),
+            &BindCtx::default(),
+        )
+        .unwrap();
         assert_eq!(out.trim(), "SELECT * FROM excel_tmp_0");
     }
 

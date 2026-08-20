@@ -1,3 +1,4 @@
+use crate::args::sql_quote;
 use crate::schema::{quote_ident, unique_column_names};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
@@ -195,4 +196,96 @@ fn table_columns(conn: &Connection, name: &str) -> Result<Vec<String>> {
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(cols)
+}
+
+/// 在每一行末尾追加常量列（来源路径、sheet、页码等）。
+pub fn attach_const_column(
+    headers: &mut Vec<String>,
+    rows: &mut [Vec<Cell>],
+    name: &str,
+    value: Cell,
+) {
+    headers.push(name.to_string());
+    for row in rows {
+        row.push(value.clone());
+    }
+}
+
+/// 把 `src` 表按列名合并进 `dest`，并附上来源维度列。
+pub fn union_from_table(
+    conn: &mut Connection,
+    dest: &str,
+    src: &str,
+    extras: &[(String, String)],
+    append: bool,
+) -> Result<()> {
+    let src_cols = table_columns(conn, src)?;
+    if src_cols.is_empty() && extras.is_empty() {
+        bail!("无法合并空表 `{src}`");
+    }
+
+    if !append || !table_exists(conn, dest)? {
+        if table_exists(conn, dest)? {
+            conn.execute(&format!("DROP TABLE {}", quote_ident(dest)), [])?;
+        }
+        let mut select = Vec::new();
+        for c in &src_cols {
+            select.push(format!("s.{}", quote_ident(c)));
+        }
+        for (n, v) in extras {
+            select.push(format!("{} AS {}", sql_quote(v), quote_ident(n)));
+        }
+        let sql = format!(
+            "CREATE TABLE {} AS SELECT {} FROM {} AS s",
+            quote_ident(dest),
+            select.join(", "),
+            quote_ident(src)
+        );
+        conn.execute(&sql, [])
+            .with_context(|| format!("合并建表失败: {sql}"))?;
+        return Ok(());
+    }
+
+    let mut dest_cols = table_columns(conn, dest)?;
+    for name in src_cols.iter().chain(extras.iter().map(|(n, _)| n)) {
+        if !dest_cols.iter().any(|d| d == name) {
+            conn.execute(
+                &format!(
+                    "ALTER TABLE {} ADD COLUMN {} TEXT",
+                    quote_ident(dest),
+                    quote_ident(name)
+                ),
+                [],
+            )?;
+            dest_cols.push(name.clone());
+        }
+    }
+
+    let mut select_exprs = Vec::new();
+    for d in &dest_cols {
+        if let Some((_, v)) = extras.iter().find(|(n, _)| n == d) {
+            select_exprs.push(sql_quote(v));
+        } else if src_cols.iter().any(|s| s == d) {
+            select_exprs.push(format!("s.{}", quote_ident(d)));
+        } else {
+            select_exprs.push("NULL".into());
+        }
+    }
+    let sql = format!(
+        "INSERT INTO {} SELECT {} FROM {} AS s",
+        quote_ident(dest),
+        select_exprs.join(", "),
+        quote_ident(src)
+    );
+    conn.execute(&sql, [])
+        .with_context(|| format!("合并插入失败: {sql}"))?;
+    Ok(())
+}
+
+pub fn include_source(args: &crate::args::Args) -> bool {
+    if args.named.contains_key("include_source") {
+        args.get_bool(99, &["include_source"])
+    } else {
+        true
+    }
 }

@@ -41,14 +41,42 @@ impl SyntaxOpts {
 
 #[derive(Debug, Clone)]
 pub enum ScriptStmt {
-    Load { name: String, source: SourceSpec },
+    Set { name: String, value: Value },
+    Load(LoadStmt),
     Query(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadStmt {
+    pub name: String,
+    pub source: SourceSpec,
+    pub each: Option<EachSpec>,
+    pub fors: Vec<ForClause>,
 }
 
 #[derive(Debug, Clone)]
 pub enum SourceSpec {
     Locator { uri: String, options: Vec<ArgSlot> },
     Call { name: String, args: Vec<ArgSlot> },
+}
+
+#[derive(Debug, Clone)]
+pub enum EachSpec {
+    List(Vec<String>),
+    Glob(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct ForClause {
+    pub var: String,
+    pub domain: ForDomain,
+}
+
+#[derive(Debug, Clone)]
+pub enum ForDomain {
+    List(Vec<Value>),
+    Range { start: i64, end: i64, step: i64 },
+    Glob(String),
 }
 
 pub fn parse_script(sql: &str) -> Result<Vec<ScriptStmt>> {
@@ -74,8 +102,33 @@ fn parse_statement(s: &str) -> Result<ScriptStmt> {
         if ident.eq_ignore_ascii_case("load") {
             return parse_load(s, after);
         }
+        if ident.eq_ignore_ascii_case("set") {
+            return parse_set(s, after);
+        }
     }
     Ok(ScriptStmt::Query(s.to_string()))
+}
+
+fn parse_set(s: &str, after_set: usize) -> Result<ScriptStmt> {
+    let i = skip_ws(s, after_set);
+    let (name, after_name) = parse_ident(s, i).ok_or_else(|| anyhow::anyhow!("SET 缺少变量名"))?;
+    validate_bind_name(&name)?;
+    let i = skip_ws(s, after_name);
+    if i >= s.len() || s.as_bytes()[i] != b'=' {
+        bail!("SET 需要 `SET name = value`");
+    }
+    let (expr, end) = crate::args::parse_arg_expr(s, i + 1, &|_| true)?;
+    let rest = skip_ws(s, end);
+    if rest != s.len() {
+        bail!("SET 语句末尾有多余内容");
+    }
+    let value = match expr {
+        ArgExpr::Literal(v) => v,
+        ArgExpr::Call { .. } => {
+            bail!("SET 的值必须是字面量（字符串/数字/布尔）。嵌套 read() 请写在 LOAD 里")
+        }
+    };
+    Ok(ScriptStmt::Set { name, value })
 }
 
 fn parse_load(s: &str, after_load: usize) -> Result<ScriptStmt> {
@@ -101,46 +154,112 @@ fn parse_load(s: &str, after_load: usize) -> Result<ScriptStmt> {
     }
 
     let bytes = s.as_bytes();
-    if bytes[i] == b'\'' || bytes[i] == b'"' {
-        let (uri, end) = parse_string_literal(s, i)?;
-        let j = skip_ws(s, end);
-        let options = if j >= s.len() {
-            Vec::new()
-        } else if let Some((kw, after_kw)) = parse_ident(s, j) {
-            if !kw.eq_ignore_ascii_case("with") {
-                bail!("FROM 字符串之后只能跟 WITH (...)，发现 `{}`", kw);
-            }
-            parse_with_options(s, skip_ws(s, after_kw))?
-        } else {
-            bail!("无法解析 LOAD ... FROM 之后的内容");
-        };
-        return Ok(ScriptStmt::Load {
-            name,
-            source: SourceSpec::Locator { uri, options },
-        });
-    }
+    let mut each = None;
+    let mut source: Option<SourceSpec> = None;
+    let mut pos = i;
 
-    if let Some((fname, after_fname)) = parse_ident(s, i) {
-        let j = skip_ws(s, after_fname);
-        if j < s.len() && bytes[j] == b'(' {
-            let close = matching_paren(s, j)?;
-            let inner = &s[j + 1..close];
-            let args = parse_arg_list(inner, &|_| true)?;
-            let rest = skip_ws(s, close + 1);
-            if rest != s.len() {
-                bail!("LOAD 语句末尾有多余内容");
-            }
-            return Ok(ScriptStmt::Load {
-                name,
-                source: SourceSpec::Call { name: fname, args },
+    if let Some((kw, after_kw)) = parse_ident(s, i) {
+        if kw.eq_ignore_ascii_case("each") {
+            let (spec, after_each) = parse_each_spec(s, skip_ws(s, after_kw))?;
+            each = Some(spec);
+            pos = after_each;
+            let (options, after_opt) = parse_optional_with(s, pos)?;
+            source = Some(SourceSpec::Locator {
+                uri: String::new(),
+                options,
             });
+            pos = after_opt;
         }
     }
 
-    bail!("LOAD ... FROM 需要路径字符串或 read(...) 调用");
+    if source.is_none() && (bytes[i] == b'\'' || bytes[i] == b'"') {
+        let (uri, end) = parse_string_literal(s, i)?;
+        let (options, after_opt) = parse_optional_with(s, skip_ws(s, end))?;
+        source = Some(SourceSpec::Locator { uri, options });
+        pos = after_opt;
+    }
+
+    if source.is_none() {
+        if let Some((fname, after_fname)) = parse_ident(s, i) {
+            let j = skip_ws(s, after_fname);
+            if j < s.len() && bytes[j] == b'(' {
+                let close = matching_paren(s, j)?;
+                let inner = &s[j + 1..close];
+                let args = parse_arg_list(inner, &|_| true)?;
+                source = Some(SourceSpec::Call { name: fname, args });
+                pos = skip_ws(s, close + 1);
+            }
+        }
+    }
+
+    let Some(source) = source else {
+        bail!("LOAD ... FROM 需要路径字符串、EACH (...) 或 read(...) 调用");
+    };
+
+    let (fors, rest) = parse_for_clauses(s, pos)?;
+    if rest != s.len() {
+        bail!(
+            "LOAD 语句末尾有多余内容: `{}`",
+            s[rest..].chars().take(40).collect::<String>()
+        );
+    }
+
+    Ok(ScriptStmt::Load(LoadStmt {
+        name,
+        source,
+        each,
+        fors,
+    }))
 }
 
-fn parse_with_options(s: &str, i: usize) -> Result<Vec<ArgSlot>> {
+fn parse_each_spec(s: &str, i: usize) -> Result<(EachSpec, usize)> {
+    if let Some((kw, after)) = parse_ident(s, i) {
+        if kw.eq_ignore_ascii_case("glob") {
+            let j = skip_ws(s, after);
+            if j >= s.len() || (s.as_bytes()[j] != b'\'' && s.as_bytes()[j] != b'"') {
+                bail!("EACH GLOB 需要路径字符串");
+            }
+            let (pat, end) = parse_string_literal(s, j)?;
+            return Ok((EachSpec::Glob(pat), end));
+        }
+    }
+    if i < s.len() && s.as_bytes()[i] == b'(' {
+        let close = matching_paren(s, i)?;
+        let inner = &s[i + 1..close];
+        let slots = parse_arg_list(inner, &|_| false)?;
+        let mut items = Vec::new();
+        for slot in slots {
+            match slot {
+                ArgSlot::Positional(ArgExpr::Literal(Value::Str(v))) => items.push(v),
+                _ => bail!("EACH (...) 只接受字符串定位符列表"),
+            }
+        }
+        if items.is_empty() {
+            bail!("EACH (...) 至少需要一个定位符");
+        }
+        return Ok((EachSpec::List(items), close + 1));
+    }
+    bail!("EACH 需要括号列表或 GLOB '模式'");
+}
+
+fn parse_optional_with(s: &str, i: usize) -> Result<(Vec<ArgSlot>, usize)> {
+    let i = skip_ws(s, i);
+    if i >= s.len() {
+        return Ok((Vec::new(), i));
+    }
+    if let Some((kw, after_kw)) = parse_ident(s, i) {
+        if kw.eq_ignore_ascii_case("with") {
+            return parse_with_options(s, skip_ws(s, after_kw));
+        }
+        if kw.eq_ignore_ascii_case("for") {
+            return Ok((Vec::new(), i));
+        }
+        bail!("FROM 之后只能跟 WITH (...) 或 FOR ...，发现 `{kw}`");
+    }
+    Ok((Vec::new(), i))
+}
+
+fn parse_with_options(s: &str, i: usize) -> Result<(Vec<ArgSlot>, usize)> {
     if i >= s.len() || s.as_bytes()[i] != b'(' {
         bail!("WITH 需要括号列表，例如 WITH (sheet='Sheet1', skip=2)");
     }
@@ -152,11 +271,105 @@ fn parse_with_options(s: &str, i: usize) -> Result<Vec<ArgSlot>> {
             bail!("WITH (...) 只允许命名参数，例如 sheet='Sheet1'，不要写位置参数");
         }
     }
-    let rest = skip_ws(s, close + 1);
-    if rest != s.len() {
-        bail!("LOAD 语句末尾有多余内容");
+    Ok((slots, skip_ws(s, close + 1)))
+}
+
+fn parse_for_clauses(s: &str, mut i: usize) -> Result<(Vec<ForClause>, usize)> {
+    let mut out = Vec::new();
+    loop {
+        i = skip_ws(s, i);
+        if i >= s.len() {
+            break;
+        }
+        let Some((kw, after)) = parse_ident(s, i) else {
+            break;
+        };
+        if !kw.eq_ignore_ascii_case("for") {
+            break;
+        }
+        let j = skip_ws(s, after);
+        let (var, after_var) =
+            parse_ident(s, j).ok_or_else(|| anyhow::anyhow!("FOR 缺少变量名"))?;
+        validate_bind_name(&var)?;
+        let j = skip_ws(s, after_var);
+        let (in_kw, after_in) =
+            parse_ident(s, j).ok_or_else(|| anyhow::anyhow!("FOR {var} 需要 IN"))?;
+        if !in_kw.eq_ignore_ascii_case("in") {
+            bail!("FOR {var} 需要 IN，发现 `{in_kw}`");
+        }
+        let (domain, after_domain) = parse_for_domain(s, skip_ws(s, after_in))?;
+        out.push(ForClause { var, domain });
+        i = after_domain;
     }
-    Ok(slots)
+    Ok((out, skip_ws(s, i)))
+}
+
+fn parse_for_domain(s: &str, i: usize) -> Result<(ForDomain, usize)> {
+    if let Some((kw, after)) = parse_ident(s, i) {
+        if kw.eq_ignore_ascii_case("glob") {
+            let j = skip_ws(s, after);
+            if j >= s.len() || (s.as_bytes()[j] != b'\'' && s.as_bytes()[j] != b'"') {
+                bail!("FOR ... IN GLOB 需要路径字符串");
+            }
+            let (pat, end) = parse_string_literal(s, j)?;
+            return Ok((ForDomain::Glob(pat), end));
+        }
+        bail!("FOR ... IN 后面不能是标识符 `{kw}`，请用列表、范围或 GLOB");
+    }
+    if i < s.len() && s.as_bytes()[i] == b'(' {
+        let close = matching_paren(s, i)?;
+        let inner = &s[i + 1..close];
+        let slots = parse_arg_list(inner, &|_| false)?;
+        let mut vals = Vec::new();
+        for slot in slots {
+            match slot {
+                ArgSlot::Positional(ArgExpr::Literal(v)) => vals.push(v),
+                _ => bail!("FOR ... IN (...) 只接受字面量列表"),
+            }
+        }
+        if vals.is_empty() {
+            bail!("FOR ... IN (...) 至少需要一个值");
+        }
+        return Ok((ForDomain::List(vals), close + 1));
+    }
+    if let Some((start, after_start)) = parse_int_at(s, i) {
+        let j = skip_ws(s, after_start);
+        if s[j..].starts_with("..") {
+            let (end, after_end) = parse_int_at(s, skip_ws(s, j + 2))
+                .ok_or_else(|| anyhow::anyhow!("范围缺少结束值，例如 1..12"))?;
+            let k = skip_ws(s, after_end);
+            let (step, after_step) = if let Some((kw, after_kw)) = parse_ident(s, k) {
+                if kw.eq_ignore_ascii_case("step") {
+                    parse_int_at(s, skip_ws(s, after_kw))
+                        .ok_or_else(|| anyhow::anyhow!("STEP 需要整数"))?
+                } else {
+                    (1, k)
+                }
+            } else {
+                (1, k)
+            };
+            return Ok((ForDomain::Range { start, end, step }, after_step));
+        }
+    }
+    bail!("FOR ... IN 需要 ('a','b')、1..12 或 GLOB 'pat'");
+}
+
+fn parse_int_at(s: &str, start: usize) -> Option<(i64, usize)> {
+    let rest = &s[start..];
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    if bytes.first() == Some(&b'-') || bytes.first() == Some(&b'+') {
+        i = 1;
+    }
+    if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+        return None;
+    }
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    let token = &rest[..i];
+    let n: i64 = token.parse().ok()?;
+    Some((n, start + i))
 }
 
 pub fn validate_table_name(name: &str) -> Result<()> {
@@ -172,11 +385,16 @@ pub fn validate_table_name(name: &str) -> Result<()> {
     }
     match name.to_ascii_lowercase().as_str() {
         "select" | "from" | "where" | "join" | "with" | "load" | "table" | "as" | "group"
-        | "order" | "limit" | "insert" | "update" | "delete" => {
+        | "order" | "limit" | "insert" | "update" | "delete" | "set" | "each" | "for" | "in"
+        | "glob" | "step" | "union" => {
             bail!("`{}` 是保留字，不能用作 LOAD 表名", name)
         }
         _ => Ok(()),
     }
+}
+
+pub fn validate_bind_name(name: &str) -> Result<()> {
+    validate_table_name(name).map_err(|e| anyhow::anyhow!("变量名不合法: {e}"))
 }
 
 const HISTORICAL_ALIASES: &[&str] = &[
@@ -311,13 +529,36 @@ pub fn resolve_format(name: &str, slots: &[ArgSlot]) -> Option<String> {
     locator_literal(slots).and_then(|u| infer_format(&u))
 }
 
-const COMMON_OPTS: &[&str] = &["format", "fmt", "path", "file", "url", "locator"];
+const COMMON_OPTS: &[&str] = &[
+    "format",
+    "fmt",
+    "path",
+    "file",
+    "url",
+    "locator",
+    // 传输/展开选项：与 payload format 正交
+    "page_param",
+    "page_from",
+    "page_to",
+    "page_size",
+    "page_size_param",
+    "offset_param",
+    "offset_step",
+    "stop",
+    "include_source",
+];
 
 fn format_options(format: &str) -> &'static [&'static str] {
     match format {
-        "excel" | "xlsx" | "xls" | "xlsm" => {
-            &["sheet", "skip", "skiprows", "skip_rows", "str", "force_str"]
-        }
+        "excel" | "xlsx" | "xls" | "xlsm" => &[
+            "sheet",
+            "skip",
+            "skiprows",
+            "skip_rows",
+            "str",
+            "force_str",
+            "include_source",
+        ],
         "csv" | "tsv" => &[
             "delim",
             "delimiter",
@@ -336,6 +577,15 @@ fn format_options(format: &str) -> &'static [&'static str] {
             "headers",
             "json_path",
             "path",
+            "page_param",
+            "page_from",
+            "page_to",
+            "page_size",
+            "page_size_param",
+            "offset_param",
+            "offset_step",
+            "stop",
+            "include_source",
         ],
         "clipboard" | "clip" => &["delim", "delimiter", "sep", "str", "force_str"],
         "text" | "txt" => &[],
@@ -352,6 +602,7 @@ fn format_options(format: &str) -> &'static [&'static str] {
             "json_path",
             "path",
             "pointer",
+            "include_source",
         ],
         _ => &[],
     }
@@ -447,9 +698,9 @@ mod tests {
                 .unwrap();
         assert_eq!(stmts.len(), 2);
         match &stmts[0] {
-            ScriptStmt::Load { name, source } => {
-                assert_eq!(name, "users");
-                match source {
+            ScriptStmt::Load(load) => {
+                assert_eq!(load.name, "users");
+                match &load.source {
                     SourceSpec::Locator { uri, options } => {
                         assert_eq!(uri, "a.xlsx");
                         assert_eq!(options.len(), 2);
@@ -472,10 +723,10 @@ mod tests {
     fn load_from_call() {
         let stmts = parse_script("LOAD t FROM read_csv('a.csv')").unwrap();
         match &stmts[0] {
-            ScriptStmt::Load {
+            ScriptStmt::Load(LoadStmt {
                 source: SourceSpec::Call { name, .. },
                 ..
-            } => assert_eq!(name, "read_csv"),
+            }) => assert_eq!(name, "read_csv"),
             _ => panic!("expected call"),
         }
     }
@@ -494,5 +745,36 @@ mod tests {
         let (name, slots) = desugar_call("read_excel", slots);
         assert_eq!(name, "read");
         assert!(named_format(&slots).as_deref() == Some("excel"));
+    }
+
+    #[test]
+    fn parse_set_and_for_each() {
+        let stmts = parse_script(
+            "SET region = 'east'; LOAD t FROM '${base}/${region}.csv' FOR region IN ('east', 'west'); LOAD u FROM EACH ('a.csv', 'b.csv'); LOAD p FROM 'x' FOR n IN 1..3 STEP 1",
+        )
+        .unwrap();
+        assert!(matches!(stmts[0], ScriptStmt::Set { .. }));
+        match &stmts[1] {
+            ScriptStmt::Load(l) => {
+                assert_eq!(l.fors.len(), 1);
+                assert_eq!(l.fors[0].var, "region");
+            }
+            _ => panic!("load"),
+        }
+        match &stmts[2] {
+            ScriptStmt::Load(l) => {
+                assert!(matches!(l.each, Some(EachSpec::List(ref v)) if v.len() == 2));
+            }
+            _ => panic!("each"),
+        }
+        match &stmts[3] {
+            ScriptStmt::Load(l) => match &l.fors[0].domain {
+                ForDomain::Range { start, end, step } => {
+                    assert_eq!((*start, *end, *step), (1, 3, 1));
+                }
+                _ => panic!("range"),
+            },
+            _ => panic!("load"),
+        }
     }
 }

@@ -82,16 +82,37 @@ ON TRIM(CAST(u.id AS TEXT)) = TRIM(CAST(o.user_id AS TEXT))
 ## 目录合并（月报 / 多文件）
 
 ```sql
-LOAD sales FROM './sales_*.xlsx' WITH (format='glob', sheet='Sheet1');
-SELECT strftime('%Y-%m', "日期") AS ym, SUM("金额") AS total
+LOAD sales FROM EACH GLOB './sales_*.xlsx' WITH (format='excel', sheet='Sheet1');
+SELECT _source, strftime('%Y-%m', "日期") AS ym, SUM("金额") AS total
 FROM sales
-GROUP BY ym
+GROUP BY _source, ym
 ORDER BY ym;
 ```
 
-后续文件多出来的列会补上，缺的列是 NULL。
+或 `'./sales_*.xlsx'`（glob 连接器，同样带 `_source`）。后续文件多出来的列会补上，缺的列是 NULL。
 
-## HTTP JSON
+## HTTP JSON / 分页
+
+```sql
+LOAD orders FROM 'https://api.example.com/orders' WITH (
+  format='json',
+  json_path='data',
+  page_param='page',
+  page_to=50
+);
+SELECT _page, status, COUNT(*) AS n
+FROM orders
+GROUP BY _page, status;
+```
+
+相似环境只改参数：
+
+```sql
+SET base = 'https://api.example.com';
+LOAD orders FROM '${base}/${region}/orders' WITH (format='json', json_path='data')
+FOR region IN ('east', 'west');
+SELECT _region, COUNT(*) FROM orders GROUP BY _region;
+```
 
 ```sql
 LOAD orders FROM 'https://api.example.com/orders' WITH (

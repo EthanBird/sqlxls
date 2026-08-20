@@ -3,11 +3,12 @@
 **sqlxls** 是一个用 SQL 做数据清理与分析的命令行工具。Excel 只是数据源之一：本地 CSV / JSON、目录通配、剪贴板、HTTP API 都可以当成表来 JOIN、过滤、聚合，再导出成表格文件。
 
 底层目前是内存 SQLite；导入路径使用**显式事务 + 批量 INSERT**。  
-技术架构见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，**语法稳定方案**见 [`docs/SYNTAX.md`](docs/SYNTAX.md)。
+技术架构见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，**语法稳定方案**见 [`docs/SYNTAX.md`](docs/SYNTAX.md)，**动态源（FOR/EACH/分页）**见 [`docs/DYNAMIC.md`](docs/DYNAMIC.md)。
 
 ## 能做什么
 
 - **推荐**：`LOAD 表 FROM '文件' WITH (...)` 绑定数据源，后面写标准 SQL
+- **动态源**：`SET` / `--set`、`FOR`、`EACH`、目录通配、HTTP 分页、`sheet='*'`；默认 UNION 成一张表，分析只写一次
 - 一行探索：把 `read(...)` 写在 `FROM` 里（糖）
 - 嵌套调用：`read_csv(read_text('path.txt'))`，内层先求值，不会把文件内容拼进 SQL
 - `--strict`：除定位符外必须用命名参数；`--syntax=2` 查询层只允许 `read()` / `LOAD`
@@ -53,10 +54,39 @@ sqlxls query.sql [-o 输出文件]
 sqlxls -f "read_api('https://example.com/data.json')"
 sqlxls "SELECT ..." --explain    # 打印改写后的 SQL
 sqlxls script.sql --strict      # 禁止位置参数超载
-sqlxls script.sql --syntax=2    # 查询层只允许 read() / LOAD
+sqlxls script.sql --strict --set region=east
 ```
 
-### 0. 推荐：先 LOAD，再写标准 SQL
+### 0.1 动态源：相似文件 / URL / 分页只写一份 SELECT
+
+默认把多个物理源 **UNION 成一张表**，带来源列，查询不用复制。细节见 [`docs/DYNAMIC.md`](docs/DYNAMIC.md)。
+
+```sql
+-- 只换区域
+SET base = 'https://api.example.com';
+LOAD orders FROM '${base}/${region}/orders' WITH (format='json', json_path='data')
+FOR region IN ('east', 'west');
+SELECT _region, COUNT(*) FROM orders GROUP BY _region;
+
+-- 目录同质表
+LOAD sales FROM EACH GLOB './sales_*.csv';
+SELECT _source, SUM(amount) FROM sales GROUP BY _source;
+
+-- HTTP 分页直到空页
+LOAD items FROM 'https://api.example.com/items' WITH (
+  format='json', json_path='data', page_param='page', page_to=50
+);
+
+-- 工作簿全部同构 sheet
+LOAD book FROM 'workbook.xlsx' WITH (format='excel', sheet='*');
+SELECT _sheet, COUNT(*) FROM book GROUP BY _sheet;
+```
+
+```bash
+sqlxls report.sql --set region=east
+```
+
+### 1. Excel
 
 ```sql
 LOAD users  FROM 'users.xlsx' WITH (format='excel', sheet='Sheet1');

@@ -1,4 +1,5 @@
 pub mod args;
+pub mod bind;
 pub mod classify;
 pub mod engine;
 pub mod functions;

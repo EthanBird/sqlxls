@@ -49,20 +49,31 @@ SELECT * FROM read_excel('a.xlsx', 'Sheet1', 2, 'str')
 
 ## 3. 规范语法（syntax=1）
 
-脚本是语句序列。语句只有两类。
+脚本是语句序列。语句三类：`SET`、`LOAD`、查询 SQL。
 
 ```ebnf
 script          = { statement ";" } ;
 
-statement       = load_stmt
+statement       = set_stmt
+                | load_stmt
                 | query_stmt ;          (* 标准 SQL，由引擎解析 *)
 
-(* —— Source 层：唯一允许的自定义语法 —— *)
+set_stmt        = "SET" ident "=" value ;
 
-load_stmt       = "LOAD" [ "TABLE" ] ident "FROM" source ;
+load_stmt       = "LOAD" [ "TABLE" ] ident "FROM" source { for_clause } ;
 
 source          = locator [ "WITH" options ]
+                | "EACH" each_spec [ "WITH" options ]
                 | read_call ;
+
+each_spec       = "(" locator { "," locator } ")"
+                | "GLOB" locator ;
+
+for_clause      = "FOR" ident "IN" for_domain ;
+
+for_domain      = "(" value { "," value } ")"
+                | integer ".." integer [ "STEP" integer ]
+                | "GLOB" locator ;
 
 locator         = string ;              (* URI 或路径 *)
 
@@ -86,6 +97,8 @@ ident           = letter { letter | digit | "_" } ;
 (* 查询层：不得再出现自定义函数。
    过渡期允许 table_factor 上的 read_call，见 §5。 *)
 ```
+
+动态展开（相似 URL、目录、分页、多 Sheet）见 [DYNAMIC.md](./DYNAMIC.md)。默认扇入为一张表 + `_source` / `_region` / `_page` / `_sheet`，查询仍是标准 SQL。
 
 `LOAD` 的 `WITH` **只接受命名参数**。没有第三位到底是 skip 还是 str 这种事。
 
@@ -240,6 +253,9 @@ Query 层因此可以是 SQLite，也可以是 DuckDB，**不必带着 `read_exc
 | 规范 | 状态 |
 |------|------|
 | `LOAD … FROM locator WITH (命名选项)` | 已实现 |
+| `SET` / `--set` / `${var}` | 已实现 |
+| `FOR` / `EACH` 展开后 UNION | 已实现 |
+| HTTP 分页 / glob `_source` / `sheet='*'` | 已实现 |
 | 规范 `read(locator, format=…, 命名选项)` | 已实现 |
 | 糖函数 desugar 到 `read(..., format=…)` | 已实现 |
 | `--syntax=1` / `--syntax=2` / `--strict` | 已实现 |

@@ -15,6 +15,45 @@ impl TableFunction for ReadExcelExt {
 
     fn execute(&self, ctx: &mut ExecCtx, args: &Args) -> Result<FuncOutput> {
         let spec = parse_excel_args(args)?;
+        let add_source = crate::ingest::include_source(args);
+        let all_sheets = spec
+            .sheet
+            .as_deref()
+            .map(|s| s == "*" || s.eq_ignore_ascii_case("all"))
+            .unwrap_or(false);
+
+        if all_sheets {
+            let names = excel_sheet_names(&spec.path)?;
+            if names.is_empty() {
+                anyhow::bail!("Excel 文件中没有任何表格");
+            }
+            let mut first = true;
+            for sheet in &names {
+                let (mut headers, mut rows) =
+                    excel_to_frame(&spec.path, Some(sheet), spec.skip, spec.force_str)?;
+                if add_source {
+                    crate::ingest::attach_const_column(
+                        &mut headers,
+                        &mut rows,
+                        "_sheet",
+                        Cell::Text(sheet.clone()),
+                    );
+                }
+                ingest_rows(
+                    ctx.conn,
+                    &ctx.dest_table,
+                    &headers,
+                    rows,
+                    IngestOpts {
+                        force_str: spec.force_str,
+                        append: !first,
+                    },
+                )?;
+                first = false;
+            }
+            return Ok(FuncOutput::Table);
+        }
+
         let (headers, rows) =
             excel_to_frame(&spec.path, spec.sheet.as_deref(), spec.skip, spec.force_str)?;
         ingest_rows(
@@ -117,6 +156,11 @@ pub fn excel_to_frame(
         rows.push(cells);
     }
     Ok((headers, rows))
+}
+
+pub fn excel_sheet_names(path: &str) -> Result<Vec<String>> {
+    let workbook = open_workbook_auto(path).with_context(|| format!("无法打开 Excel: {}", path))?;
+    Ok(workbook.sheet_names().to_vec())
 }
 
 fn data_to_cell(cell: &Data, force_str: bool) -> Cell {

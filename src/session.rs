@@ -1,8 +1,7 @@
+use crate::bind::{eval_load, BindCtx};
 use crate::engine::{handle_output, handle_text_output};
 use crate::functions::Registry;
-use crate::rewrite::{
-    eval_source, eval_standalone, is_query, parse_standalone_call, rewrite_sql, CallOut,
-};
+use crate::rewrite::{eval_standalone, is_query, parse_standalone_call, rewrite_sql, CallOut};
 use crate::syntax::{parse_script, ScriptStmt, SyntaxOpts};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -13,6 +12,7 @@ pub struct Session {
     registry: Registry,
     table_counter: usize,
     opts: SyntaxOpts,
+    bind: BindCtx,
 }
 
 impl Session {
@@ -31,7 +31,12 @@ impl Session {
             registry: Registry::builtin(),
             table_counter: 0,
             opts,
+            bind: BindCtx::default(),
         })
+    }
+
+    pub fn set_var(&mut self, name: impl Into<String>, value: crate::args::Value) {
+        self.bind.set(name, value);
     }
 
     pub fn connection(&self) -> &Connection {
@@ -48,17 +53,29 @@ impl Session {
         for (i, stmt) in stmts.into_iter().enumerate() {
             let is_last = i == last_idx;
             match stmt {
-                ScriptStmt::Load { name, source } => {
+                ScriptStmt::Set { name, value } => {
+                    let rendered = value.clone().into_string().unwrap_or_default();
                     if explain {
-                        eprintln!("-- LOAD {} --", name);
+                        eprintln!("-- SET {} = {} --", name, rendered);
                     }
-                    match eval_source(
-                        &source,
-                        Some(name.clone()),
+                    self.bind.set(name.clone(), value);
+                    if is_last {
+                        println!("✅ SET {name} = {rendered}");
+                    }
+                }
+                ScriptStmt::Load(load) => {
+                    if explain {
+                        eprintln!("-- LOAD {} --", load.name);
+                    }
+                    match eval_load(
+                        &load,
+                        &load.name,
                         &mut self.conn,
                         &self.registry,
                         &mut self.table_counter,
                         &self.opts,
+                        &self.bind,
+                        explain,
                     )? {
                         CallOut::Table(t) => {
                             if is_last {
@@ -72,7 +89,7 @@ impl Session {
                             } else {
                                 anyhow::bail!(
                                     "LOAD {} 得到的是文本而不是表，不能继续后续语句",
-                                    name
+                                    load.name
                                 );
                             }
                         }
@@ -85,6 +102,7 @@ impl Session {
                         &self.registry,
                         &mut self.table_counter,
                         &self.opts,
+                        &self.bind,
                     )?;
                     if explain {
                         eprintln!("-- rewritten SQL --\n{}\n-------------------", rewritten);
@@ -130,6 +148,7 @@ impl Session {
             &self.registry,
             &mut self.table_counter,
             &self.opts,
+            &self.bind,
         )? {
             CallOut::Table(t) => {
                 let sql = format!("SELECT * FROM {}", t);

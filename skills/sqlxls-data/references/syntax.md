@@ -1,4 +1,4 @@
-# sqlxls Source 语法（v0.2 / syntax=1）
+# sqlxls Source 语法（v0.3 / syntax=1）
 
 查询必须是标准 SQL。数据源只用这一套封闭语言。
 
@@ -12,6 +12,7 @@ LOAD ident FROM read('locator', format='csv', delim=',');
 - `ident`：ASCII 表名，之后 SQL 里用这个名字。
 - `locator`：文件路径、`https://` URL、含 `*`/`?` 的 glob、`clip:` / `clipboard:`。
 - `WITH` **只接受命名参数**。没有「第三位到底是 skip 还是 str」。
+- 动态扇出见 [dynamic.md](dynamic.md)：`SET` / `FOR` / `EACH` / 分页。
 
 推荐：先 `LOAD` 再 `SELECT`。`FROM read(...)` 是匿名糖，desugar 成临时表。
 

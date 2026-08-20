@@ -36,6 +36,11 @@ impl TableFunction for ReadAutoExt {
         let mut dispatched = args.clone();
         rewrite_locator(&mut dispatched, &src, &fmt);
 
+        // 定位符的 scheme 决定传输：http(s) 始终走 HTTP 连接器，format 只影响解码。
+        if src.starts_with("http://") || src.starts_with("https://") {
+            return ReadApiExt.execute(ctx, &dispatched);
+        }
+
         match fmt.as_str() {
             "excel" | "xlsx" | "xls" | "xlsm" => ReadExcelExt.execute(ctx, &dispatched),
             "csv" | "tsv" => ReadCsvExt.execute(ctx, &dispatched),

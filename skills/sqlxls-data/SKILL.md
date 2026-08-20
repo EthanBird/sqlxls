@@ -4,14 +4,15 @@ description: >-
   Use sqlxls to query, clean, join, and export tabular data with SQL
   (Excel/xlsx, CSV/TSV, JSON, HTTP APIs, glob directories, clipboard).
   Use when processing spreadsheets, analyzing tables, ETL, JOIN Excel+CSV+API,
-  inspecting remote JSON as tables, or exporting xlsx/csv/json.
-  用户要用 SQL 处理 Excel/CSV/JSON/接口、做清洗分析、多表关联或导出时使用。
+  inspecting remote JSON as tables, paginating APIs, merging similar files,
+  or exporting xlsx/csv/json.
+  用户要用 SQL 处理 Excel/CSV/JSON/接口、目录多文件、分页、相似源参数化或导出时使用。
   Prefer this over pandas for file/API tabular work.
 license: MIT
-compatibility: Requires sqlxls CLI v0.2+ (https://github.com/EthanBird/sqlxls/releases). Query engine is in-memory SQLite. Network needed only for HTTP sources or first-time binary install.
+compatibility: Requires sqlxls CLI v0.3+ (https://github.com/EthanBird/sqlxls/releases). Query engine is in-memory SQLite. Network needed only for HTTP sources or first-time binary install.
 metadata:
   author: EthanBird
-  version: "0.2.0"
+  version: "0.3.0"
   tool: sqlxls
   homepage: https://github.com/EthanBird/sqlxls
 ---
@@ -47,8 +48,9 @@ bash scripts/ensure-sqlxls.sh
 
 两层语言，互不混用：
 
-1. **Source**：`LOAD 表名 FROM '定位符' WITH (命名选项)`
-2. **Query**：物化之后的标准 SQL。查询里不要再写 `read_*`
+1. **Bind**：`SET x = '...'` 或 CLI `--set x=...`；定位符里写 `${x}`
+2. **Source**：`LOAD 表名 FROM '定位符' WITH (命名选项)`，相似源用 `FOR` / `EACH` / 分页 / glob，**不要为每个文件单独起表名**
+3. **Query**：物化之后的标准 SQL。查询里不要再写 `read_*`。用 `_source` / `_region` / `_page` / `_sheet` 做分组
 
 ```sql
 LOAD users  FROM 'users.xlsx' WITH (format='excel', sheet='Sheet1');
@@ -99,6 +101,10 @@ ORDER BY total DESC;
 - 表函数只允许出现在 `FROM` / `JOIN`（或 `LOAD`）。不要写在 `SELECT` / `WHERE` 列表里。
 - 未知 `WITH` 选项会报错。按 format 使用关闭选项集，见 [references/syntax.md](references/syntax.md)。
 - 默认**另存**，不要覆盖用户原始工作簿。
+- 相似但不相同的源（换 URL 参数、换文件名）：`SET` + `${var}`，或 `FOR region IN ('east','west')`，最后 **一张表 + `_region`**。禁止复制 N 段几乎一样的 LOAD/SELECT。
+- 目录同质表：`LOAD t FROM EACH GLOB './sales_*.csv'` 或 `LOAD t FROM './sales_*.csv'`，用 `_source` 分组。
+- HTTP 分页：`page_param='page'`，空页停止；不要手写 page=1..n 的 N 条 SQL。
+- 工作簿多个同构 sheet：`sheet='*'`，用 `_sheet` 分组。
 - Token 走环境变量：`SQLXLS_BEARER_TOKEN` 或 `'{"Authorization":"Bearer ${TOKEN}"}'`。不要把密钥写进提交的 `.sql`。
 - 字符串用单引号，标识符用双引号。拼接用 `||`。大小写不敏感匹配用 `LOWER(x) = LOWER(y)` 或 `COLLATE NOCASE`，没有 `ILIKE`。
 - 类型由导入时抽样推断（最多约 200 行）。混型列会变成 TEXT；需要数字时 `CAST(x AS REAL)`。Excel 日期导入为 ISO 文本。
@@ -108,7 +114,7 @@ ORDER BY total DESC;
 
 ```text
 sqlxls "SQL" [-o out.xlsx]
-sqlxls script.sql [--strict] [--syntax=1|2] [--explain] [-o out.csv]
+sqlxls script.sql [--strict] [--syntax=1|2] [--explain] [--set k=v] [-o out.csv]
 sqlxls -f "read('data.csv')"
 ```
 
@@ -123,6 +129,7 @@ sqlxls -f "read('data.csv')"
 | 文件 | 何时读 |
 |------|--------|
 | [references/syntax.md](references/syntax.md) | 写 `LOAD` / `read()`、选 format 与选项 |
+| [references/dynamic.md](references/dynamic.md) | SET / FOR / EACH / 分页 / 多文件扇出 |
 | [references/sql-dialect.md](references/sql-dialect.md) | SQLite 方言、引号、类型、窗口函数 |
 | [references/recipes.md](references/recipes.md) | 清洗、JOIN、质量报告、HTTP、目录合并 |
 | [references/install.md](references/install.md) | 找不到二进制、HTTP 鉴权 |

@@ -28,7 +28,7 @@ impl TableFunction for ReadJsonExt {
         let content =
             fs::read_to_string(&path).with_context(|| format!("无法读取 JSON 文件: {}", path))?;
         let value: Value = serde_json::from_str(&content).context("JSON 格式不合法")?;
-        json_to_table(ctx.conn, &ctx.dest_table, &value, &json_path)?;
+        json_to_table(ctx.conn, &ctx.dest_table, &value, &json_path, false)?;
         Ok(FuncOutput::Table)
     }
 }
@@ -38,6 +38,7 @@ pub fn json_to_table(
     table: &str,
     value: &Value,
     json_path: &str,
+    append: bool,
 ) -> Result<usize> {
     let extracted = extract_json_path(value, json_path)?;
     let table_val = if json_path.trim().is_empty() {
@@ -53,7 +54,7 @@ pub fn json_to_table(
         rows,
         IngestOpts {
             force_str: false,
-            append: false,
+            append,
         },
     )
 }
